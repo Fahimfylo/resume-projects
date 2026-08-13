@@ -1,0 +1,113 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+@import "./theme/tokens.css";
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-[var(--bg-app)] text-[var(--text-1)] antialiased selection:bg-[var(--accent)] selection:text-[var(--text-strong)];
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--bg-raised);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-2);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--border-3);
+  }
+}
+
+/* React Flow theme tweaks */
+.react-flow__attribution {
+  background: rgba(18, 18, 22, 0.8) !important;
+  color: var(--text-4) !important;
+  font-size: 10px !important;
+  padding: 2px 6px !important;
+  border-radius: 4px !important;
+}
+
+.react-flow__controls-button {
+  background: var(--bg-overlay) !important;
+  border-bottom: 1px solid var(--border-1) !important;
+  fill: var(--text-3) !important;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--bg-hover-strong) !important;
+  fill: var(--text-strong) !important;
+}
+
+.react-flow__controls-button svg {
+  fill: currentColor !important;
+}
+
+.react-flow__minimap-mask {
+  fill: var(--bg-app);
+  opacity: 0.75;
+}
+
+/* Relationship-edge labels (EdgeLabelRenderer portal) must sit above the
+   edges. React Flow's own CSS leaves it at z-index auto while the viewport
+   (which contains the edges) is z-index 2, so the stroke draws over the pill. */
+.react-flow__edgelabel-renderer {
+  z-index: 3;
+}
+
+/* Expandable hierarchy: smooth slide/size changes for container + child nodes.
+   The `afx-animated` class is set on group/child nodes by canvasHierarchy, and
+   `dragging` (added by React Flow) / `resizing` (toggled by the node resize
+   handlers) disable the transition mid-interaction. */
+.react-flow__node.afx-animated:not(.dragging):not(.resizing) {
+  transition: transform 300ms cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.react-flow__node-groupNode.afx-animated:not(.dragging):not(.resizing) {
+  transition:
+    transform 300ms cubic-bezier(0.25, 0.8, 0.25, 1),
+    width 300ms ease,
+    height 300ms ease;
+}
+
+/* Homepage hero canvas — subtle "alive" idle animation */
+@keyframes hero-edge-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.homepage-hero-canvas .react-flow__edge-path {
+  animation: hero-edge-pulse 4s ease-in-out infinite;
+}
+
+/* Homepage radial diagram center glow breathing */
+@keyframes glow-breathe {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+.homepage-glow {
+  animation: glow-breathe 6s ease-in-out infinite;
+}
