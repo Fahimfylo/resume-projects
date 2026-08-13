@@ -1,0 +1,28 @@
+{
+  "placeholderImages": [
+    {
+      "id": "hero-shield",
+      "description": "Abstract cybersecurity digital shield",
+      "imageUrl": "https://picsum.photos/seed/cyber1/1200/800",
+      "imageHint": "cybersecurity shield"
+    },
+    {
+      "id": "threat-map",
+      "description": "Global threat map visualization",
+      "imageUrl": "https://picsum.photos/seed/cyber2/800/600",
+      "imageHint": "threat map"
+    },
+    {
+      "id": "file-scan-ui",
+      "description": "Modern file scanning interface",
+      "imageUrl": "https://picsum.photos/seed/cyber3/600/400",
+      "imageHint": "security interface"
+    },
+    {
+      "id": "threat-intel-hero",
+      "description": "Digital matrix of data and locks",
+      "imageUrl": "https://picsum.photos/seed/cyber4/1200/400",
+      "imageHint": "cyber intelligence"
+    }
+  ]
+}

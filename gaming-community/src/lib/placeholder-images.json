@@ -1,0 +1,40 @@
+{
+  "placeholderImages": [
+    {
+      "id": "hero-wukong",
+      "description": "Black Myth Wukong cinematic landscape",
+      "imageUrl": "https://picsum.photos/seed/wukong/1920/1080",
+      "imageHint": "Black Myth Wukong gameplay"
+    },
+    {
+      "id": "hero-cyberpunk",
+      "description": "Cyberpunk 2077 neon city skyline",
+      "imageUrl": "https://picsum.photos/seed/cyber/1920/1080",
+      "imageHint": "Cyberpunk city neon"
+    },
+    {
+      "id": "hero-valorant",
+      "description": "Valorant tactical action scene",
+      "imageUrl": "https://picsum.photos/seed/val/1920/1080",
+      "imageHint": "Valorant tactical game"
+    },
+    {
+      "id": "avatar-kai",
+      "description": "Futuristic jade-themed warrior avatar",
+      "imageUrl": "https://picsum.photos/seed/avatar1/400/400",
+      "imageHint": "cyborg warrior avatar"
+    },
+    {
+      "id": "game-apex",
+      "description": "Apex Legends action shot",
+      "imageUrl": "https://picsum.photos/seed/apex/800/450",
+      "imageHint": "Apex Legends"
+    },
+    {
+      "id": "game-cod",
+      "description": "Call of Duty combat scene",
+      "imageUrl": "https://picsum.photos/seed/cod/800/450",
+      "imageHint": "Call of Duty"
+    }
+  ]
+}

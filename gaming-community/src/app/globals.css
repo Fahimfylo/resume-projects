@@ -1,0 +1,154 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 10% 2%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 4%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 84 100% 51%;
+    --primary-foreground: 240 10% 2%;
+    --secondary: 174 100% 45%;
+    --secondary-foreground: 240 10% 2%;
+    --muted: 240 10% 12%;
+    --muted-foreground: 240 5% 65%;
+    --accent: 84 100% 51%;
+    --accent-foreground: 240 10% 2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 10% 15%;
+    --input: 240 10% 15%;
+    --ring: 84 100% 51%;
+    --radius: 0.75rem;
+    
+    --jade-glow: #76ff03;
+    --nvidia-green: #76b900;
+    --deep-jade: #3d8000;
+    --spirit-teal: #00e5cc;
+    --chi-purple: #9933ff;
+    --wukong-gold: #ffb300;
+    --ember-orange: #ff7c00;
+    --void-black: #050505;
+    --dark-carbon: #0f1115;
+    --metallic-gray: #171717;
+  }
+}
+
+@layer components {
+  .kai-glow {
+    box-shadow: 0 0 20px rgba(118, 255, 3, 0.3), 0 0 40px rgba(118, 255, 3, 0.1);
+  }
+  
+  .glass-panel {
+    @apply bg-background/40 backdrop-blur-xl border border-white/10;
+  }
+  
+  .hud-frame {
+    position: relative;
+    border: 1px solid rgba(118, 255, 3, 0.2);
+    clip-path: polygon(
+      0 15px, 15px 0, calc(100% - 15px) 0, 100% 15px,
+      100% calc(100% - 15px), calc(100% - 15px) 100%, 15px 100%, 0 calc(100% - 15px)
+    );
+  }
+
+  .hud-frame::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 20px; height: 2px;
+    background: var(--jade-glow);
+  }
+
+  .spirit-border {
+    position: relative;
+    overflow: hidden;
+  }
+  
+  .spirit-border::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 1px solid transparent;
+    background: linear-gradient(90deg, transparent, var(--jade-glow), transparent) border-box;
+    -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: destination-out;
+    mask-composite: exclude;
+    animation: border-rotate 4s linear infinite;
+  }
+
+  .scanline-hud {
+    background: linear-gradient(
+      rgba(18, 16, 16, 0) 50%,
+      rgba(0, 0, 0, 0.25) 50%
+    ), linear-gradient(
+      90deg,
+      rgba(255, 0, 0, 0.06),
+      rgba(0, 255, 0, 0.02),
+      rgba(0, 0, 255, 0.06)
+    );
+    background-size: 100% 2px, 3px 100%;
+  }
+
+  .jade-orb {
+    background: radial-gradient(circle at 30% 30%, var(--jade-glow), var(--deep-jade), black);
+    box-shadow: 0 0 50px var(--deep-jade);
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+@keyframes border-rotate {
+  from { background-position: 0% 0%; }
+  to { background-position: 200% 0%; }
+}
+
+.cinematic-fog {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: url('https://picsum.photos/seed/fog/1920/1080') center/cover;
+  opacity: 0.05;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  z-index: 10;
+  filter: hue-rotate(90deg);
+}
+
+.chi-pulse {
+  animation: chi-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes chi-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.05); }
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--jade-glow) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--jade-glow);
+  border-radius: 20px;
+}

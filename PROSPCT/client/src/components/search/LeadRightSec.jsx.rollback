@@ -1,0 +1,563 @@
+import { useEffect, useState, useRef, useMemo } from "react";
+import axios from "axios";
+import { useQueryClient } from "@tanstack/react-query";
+import Cookies from "js-cookie";
+import LeadTable from "./LeadTable";
+import Pagination from "./Pagination";
+import useStore from "../../store/store";
+import API_CONFIG from "../../utils/apiConstant";
+import { saveSearchShareState } from "../../api/mutation";
+import LeadRightTopbar from "./LeadRightTopbar";
+import LeadSelectBar from "./LeadSelectBar";
+import { toast } from "react-toastify";
+import useCreditDeduction from "../../hooks/useCreditDeduction";
+import { useSearchParams } from "react-router-dom";
+import { formatContacts } from "../../utils/contactFormatter";
+import { saveRecentSearch } from "../../services/searchServices";
+import { useDebounce } from "../../hooks/useDebounce";
+
+const BASE_URL = API_CONFIG.API_ENDPOINT;
+
+const sanitizeForFeatureGates = (filters, excludedFilters) => {
+  const storeState = useStore.getState();
+  const currentUser = storeState.user;
+  const limits = (currentUser?.limits && Object.values(currentUser.limits).some(Boolean))
+    ? currentUser.limits
+    : currentUser?.plan?.features?.limits || {};
+
+  const featureGatedKeys = {
+    revenueRange: "revenueFilter",
+    revenueThousands: "revenueFilter",
+    technologies: "technologyFilter",
+  };
+
+  const sanitizedFilters = { ...filters };
+  const sanitizedExcluded = { ...excludedFilters };
+  Object.keys(featureGatedKeys).forEach((key) => {
+    const feature = featureGatedKeys[key];
+    if (!limits[feature]) {
+      if (Array.isArray(sanitizedFilters[key])) {
+        sanitizedFilters[key] = [];
+      }
+      if (Array.isArray(sanitizedExcluded[key])) {
+        sanitizedExcluded[key] = [];
+      }
+    }
+  });
+
+  return { sanitizedFilters, sanitizedExcluded };
+};
+
+const fetchCount = async (filters, excludedFilters) => {
+  const token = localStorage.getItem("userAccessToken") || Cookies.get("userAccessToken");
+  const { sanitizedFilters, sanitizedExcluded } = sanitizeForFeatureGates(filters, excludedFilters);
+
+  const response = await axios.post(
+    `${BASE_URL}/api/search/count`,
+    { filters: sanitizedFilters, excludedFilters: sanitizedExcluded },
+    {
+      timeout: 15000,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+
+  if (response.status !== 200) {
+    throw new Error("Failed to fetch count");
+  }
+
+  return response.data;
+};
+
+const LeadRightSec = ({
+  handleMouseEnter,
+  handleMouseLeave,
+  setHoveredProfile,
+  setDataItem,
+}) => {
+  const {
+    filters,
+    excludedFilters,
+    setIsDataLoading,
+    setInitialFilters,
+    setVisibleColumns,
+    visibleColumns,
+    dataRefreshKey,
+    setNextPageInfo,
+  } = useStore();
+
+  const [visibleEmails, setVisibleEmails] = useState({});
+  const [visiblePhoneNumber, setVisiblePhoneNumber] = useState({});
+  const [loadingItemId, setLoadingItemId] = useState(null);
+  const [searchParams] = useSearchParams();
+  const isInitialLoad = useRef(true);
+  const [counts, setCounts] = useState({ total: null, saved: null, new: null });
+  const [totalLoading, setTotalLoading] = useState(false);
+
+  const { deductCredit, isLoading: isCreditDeducting } = useCreditDeduction();
+  const queryClient = useQueryClient();
+
+  /* ===============================
+     DEBOUNCED FILTERS
+     Prevents firing a search on every filter toggle.
+  =============================== */
+  const debouncedFilters = useDebounce(filters, 300);
+  const debouncedExcluded = useDebounce(excludedFilters, 300);
+
+  // Strip pagination fields — count should only refetch on real filter changes
+  const countFilters = useMemo(() => {
+    const { currentPage, page, limit, cursor, ...rest } = debouncedFilters;
+    return rest;
+  }, [debouncedFilters]);
+
+  const countFilterKey = useMemo(
+    () => JSON.stringify({ f: countFilters, e: debouncedExcluded, p: debouncedFilters.currentPage, r: dataRefreshKey }),
+    [countFilters, debouncedExcluded, debouncedFilters.currentPage, dataRefreshKey],
+  );
+
+  /* ===============================
+     RESULTS STATE (paginated)
+  =============================== */
+  const [results, setResults] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [fetchError, setFetchError] = useState(null);
+
+  // Filter key that includes pagination fields and dataRefreshKey (incremented on delete)
+  const resultsFilterKey = useMemo(
+    () => JSON.stringify({ f: debouncedFilters, e: debouncedExcluded, r: dataRefreshKey }),
+    [debouncedFilters, debouncedExcluded, dataRefreshKey],
+  );
+
+  // Fetch results — fires on any filter or pagination change
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchData = async () => {
+      setIsLoading(true);
+      setFetchError(null);
+
+      const token = localStorage.getItem("userAccessToken") || Cookies.get("userAccessToken");
+      const { sanitizedFilters, sanitizedExcluded } = sanitizeForFeatureGates(debouncedFilters, debouncedExcluded);
+
+      try {
+        const res = await axios.post(
+          `${BASE_URL}/api/search`,
+          { filters: sanitizedFilters, excludedFilters: sanitizedExcluded },
+          { headers: { Authorization: `Bearer ${token}` } },
+        );
+
+        if (cancelled) return;
+
+        if (res.status !== 200) throw new Error("Failed to fetch data");
+        setResults(res.data.results || []);
+        if (res.data.nextCursor !== undefined) {
+          setNextPageInfo(res.data.nextCursor, res.data.hasMore ?? false);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setFetchError(err);
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    };
+
+    fetchData();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resultsFilterKey]);
+
+  // Count fetch — fires on filter change (excluding pagination)
+  useEffect(() => {
+    let cancelled = false;
+    let retries = 0;
+    const MAX_RETRIES = 1;
+
+    const attemptFetch = () => {
+      if (cancelled) return;
+      setTotalLoading(true);
+
+      fetchCount(countFilters, debouncedExcluded)
+        .then((data) => {
+          if (!cancelled) {
+            setCounts({ total: data.total, saved: data.saved, new: data.new });
+            setTotalLoading(false);
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (retries < MAX_RETRIES) {
+            retries++;
+            setTimeout(attemptFetch, 1000 * retries);
+          } else {
+            setTotalLoading(false);
+            toast.error("Failed to load count. Results may not reflect total.");
+          }
+        });
+    };
+
+    attemptFetch();
+
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [countFilterKey]);
+
+  // Derive isDataLoading from results loading state
+  useEffect(() => {
+    setIsDataLoading(isLoading);
+  }, [isLoading, setIsDataLoading]);
+
+  /* ===============================
+     DATA OBJECT
+     (preserves { results, counts } shape for children)
+  =============================== */
+  const data = useMemo(() => ({
+    results,
+    counts: {
+      onPage: results.length,
+      all: counts.total ?? results.length,
+      saved: counts.saved ?? results.length,
+      new: counts.new ?? results.length,
+    },
+  }), [results, counts]);
+
+  const recentSearchKeyRef = useRef(null);
+  const currentShareIdRef = useRef(null);
+  const shareStateTimerRef = useRef(null);
+  const recentSearchTimerRef = useRef(null);
+
+  const getFiltersKey = (filtersObj, excludedObj) => {
+    const stableStringify = (obj) => {
+      if (!obj || typeof obj !== "object") return JSON.stringify(obj);
+
+      const sortedKeys = Object.keys(obj).sort();
+      const entries = sortedKeys.map((key) => {
+        const value = obj[key];
+        if (Array.isArray(value)) {
+          return [key, [...value].sort()];
+        }
+        if (value && typeof value === "object") {
+          return [key, stableStringify(value)];
+        }
+        return [key, value];
+      });
+
+      return JSON.stringify(Object.fromEntries(entries));
+    };
+
+    return `${stableStringify(filtersObj)}|${stableStringify(excludedObj)}`;
+  };
+
+  const LOCAL_STORAGE_FILTERS_KEY = "prospectSearchFilters";
+  const LOCAL_STORAGE_EXCLUDED_KEY = "prospectExcludedFilters";
+  const LOCAL_STORAGE_COLUMNS_KEY = "prospectVisibleColumns";
+
+  // Persist filters + columns in localStorage (and save recent search)
+  useEffect(() => {
+    if (!isInitialLoad.current) {
+      try {
+        localStorage.setItem(LOCAL_STORAGE_FILTERS_KEY, JSON.stringify(filters));
+        localStorage.setItem(LOCAL_STORAGE_EXCLUDED_KEY, JSON.stringify(excludedFilters));
+        localStorage.setItem(LOCAL_STORAGE_COLUMNS_KEY, JSON.stringify(visibleColumns));
+      } catch (error) {
+        console.warn("Failed to persist filters to localStorage", error);
+      }
+
+      // Count total search filters applied (excluding layout/relevance settings)
+      const countSearchFilters = (filtersObject) => {
+        return Object.entries(filtersObject).reduce((total, [key, filter]) => {
+          // Exclude system fields and layout/relevance settings
+          if (
+            key === "currentPage" ||
+            key === "cursor" ||
+            key === "limit" ||
+            key === "viewType" ||
+            key === "sortOrder" ||
+            key === "selectedRelevances" ||
+            key === "appliedRelevances" ||
+            key === "appliedSortOrder" ||
+            key === "exactCount"
+          )
+            return total; // Exclude system fields
+
+          if (Array.isArray(filter)) {
+            return total + filter.length;
+          }
+          return total + (filter ? 1 : 0);
+        }, 0);
+      };
+
+      const totalSearchFiltersApplied =
+        countSearchFilters(filters) + countSearchFilters(excludedFilters);
+
+      if (totalSearchFiltersApplied > 0) {
+        const currentKey = getFiltersKey(filters, excludedFilters);
+
+        // Prevent saving duplicates from rapid filter changes (e.g., when navigating from dashboard)
+        if (currentKey !== recentSearchKeyRef.current) {
+          recentSearchKeyRef.current = currentKey;
+          if (recentSearchTimerRef.current) clearTimeout(recentSearchTimerRef.current);
+          recentSearchTimerRef.current = setTimeout(() => {
+            saveRecentSearch(filters, excludedFilters).catch((error) => {
+              console.error("Failed to save recent search:", error);
+            });
+          }, 1500);
+
+          // Debounce URL share state save (only after user stops changing filters)
+          if (shareStateTimerRef.current) clearTimeout(shareStateTimerRef.current);
+          shareStateTimerRef.current = setTimeout(async () => {
+            try {
+              const result = await saveSearchShareState(filters, excludedFilters, visibleColumns);
+              if (result.url) {
+                currentShareIdRef.current = result.shareId;
+                window.history.replaceState(null, '', result.url);
+              }
+            } catch (error) {
+              console.warn("Failed to update URL with short link:", error);
+            }
+          }, 2000);
+        } else {
+          // No filters applied, clear URL
+          window.history.replaceState(null, '', '/search');
+        }
+      } else {
+        // No filters applied, clear URL
+        window.history.replaceState(null, '', '/search');
+      }
+    } else {
+      isInitialLoad.current = false;
+    }
+  }, [filters, excludedFilters, visibleColumns]);
+
+  /* ===============================
+     SHARE LINK RESTORE
+  =============================== */
+  useEffect(() => {
+    const shareId = searchParams.get("s");
+
+    if (!shareId) return;
+
+    axios
+      .get(`${BASE_URL}/api/search/share-state/${shareId}`)
+      .then((res) => {
+        if (res.data.filters || res.data.excludedFilters) {
+          setInitialFilters(
+            res.data.filters || {},
+            res.data.excludedFilters || {},
+          );
+        }
+        // Restore layout (visibleColumns)
+        if (res.data.visibleColumns) {
+          setVisibleColumns(res.data.visibleColumns);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to fetch shared state:", error);
+      });
+  }, [searchParams, setInitialFilters, setVisibleColumns]);
+
+  /* ===============================
+     RESTORE FILTERS ON PAGE RELOAD
+  =============================== */
+  useEffect(() => {
+    const shareId = searchParams.get("s");
+    if (shareId) return; // share link already handles state restore
+
+    const savedFilters = localStorage.getItem("prospectSearchFilters");
+    const savedExcluded = localStorage.getItem("prospectExcludedFilters");
+    const savedColumns = localStorage.getItem("prospectVisibleColumns");
+
+    if (!savedFilters && !savedExcluded && !savedColumns) return;
+
+    try {
+      const currentUser = useStore.getState().user;
+      const limits = (currentUser?.limits && Object.values(currentUser.limits).some(Boolean))
+        ? currentUser.limits
+        : currentUser?.plan?.features?.limits || {};
+
+      const featureGatedKeys = {
+        revenueRange: "revenueFilter",
+        revenueThousands: "revenueFilter",
+        technologies: "technologyFilter",
+      };
+
+      const parsedFilters = savedFilters ? JSON.parse(savedFilters) : {};
+      const parsedExcluded = savedExcluded ? JSON.parse(savedExcluded) : {};
+      const parsedColumns = savedColumns ? JSON.parse(savedColumns) : null;
+
+      Object.keys(featureGatedKeys).forEach((key) => {
+        const feature = featureGatedKeys[key];
+        if (!limits[feature]) {
+          delete parsedFilters[key];
+          delete parsedExcluded[key];
+        }
+      });
+
+      if (Object.keys(parsedFilters).length || Object.keys(parsedExcluded).length) {
+        setInitialFilters(parsedFilters, parsedExcluded);
+      }
+      if (parsedColumns) {
+        // Ensure new columns are present in restored preferences
+        if (!parsedColumns.includes("Zip/Postal")) {
+          parsedColumns.push("Zip/Postal");
+        }
+        setVisibleColumns(parsedColumns);
+      }
+    } catch (error) {
+      console.warn("Failed to restore persisted filters:", error);
+    }
+  }, [searchParams, setInitialFilters, setVisibleColumns]);
+
+  /* ===============================
+     FORMAT CONTACTS
+  =============================== */
+  
+  const formattedContacts = useMemo(
+    () => (results.length > 0 ? formatContacts(results) : []),
+    [results]
+  );
+
+  // Apply sorting based on appliedRelevances
+  const { appliedRelevances, appliedSortOrder } = useStore();
+  const sortedContacts = useMemo(() => {
+    return [...formattedContacts].sort((a, b) => {
+    // Field name mapping from display names to data keys
+    const fieldMap = {
+      "Relevance": "relevance",
+      "Company": "company",
+      "Name": "name",
+      "Country": "country",
+      "Email": "email",
+      "Phone": "phone",
+      "Location": "location",
+      "Zip/Postal": "postalCode",
+      "Employees": "employees",
+      "Industry": "industry",
+      "Keywords": "keywords",
+    };
+
+    // Sort by each selected field in order
+    for (let i = 0; i < appliedRelevances.length; i++) {
+      const sortBy = appliedRelevances[i];
+      const field = fieldMap[sortBy] || sortBy.toLowerCase();
+      const valueA = a[field];
+      const valueB = b[field];
+
+      if (valueA === undefined || valueB === undefined) {
+        continue;
+      }
+
+      let comparison = 0;
+
+      // String comparison
+      if (typeof valueA === "string" && typeof valueB === "string") {
+        comparison = valueA.localeCompare(valueB);
+      }
+      // Number comparison
+      else if (typeof valueA === "number" && typeof valueB === "number") {
+        comparison = valueA - valueB;
+      }
+      // Mixed types - convert to string
+      else {
+        const aStr = String(valueA);
+        const bStr = String(valueB);
+        comparison = aStr.localeCompare(bStr);
+      }
+
+      // If values are different, apply sort order and return
+      if (comparison !== 0) {
+        return appliedSortOrder === "ascending" ? comparison : -comparison;
+      }
+    }
+
+    return 0;
+    });
+  }, [formattedContacts, appliedRelevances, appliedSortOrder]);
+
+  /* ===============================
+     ACTION HANDLERS
+  =============================== */
+
+  const handleRevealContact = async (id) => {
+    setLoadingItemId(id);
+
+    const existingItem = results.find((item) => item._id === id);
+    const src = existingItem?._source || {};
+    const hasEmail = src.email || src.person_email || existingItem?.email || existingItem?.person_email;
+    const hasPhone = src.mobilePhone || src.person_phone || src.phone || existingItem?.mobilePhone || existingItem?.person_phone;
+
+    const token = localStorage.getItem("userAccessToken") || Cookies.get("userAccessToken");
+
+    try {
+      const { isCreditRevealed, markCreditRevealed } = useStore.getState();
+
+      if (!isCreditRevealed(id, "email") && hasEmail) {
+        await deductCredit({ type: "email", quantity: 1 });
+        markCreditRevealed(id, "email");
+      }
+      if (!isCreditRevealed(id, "phone") && hasPhone) {
+        await deductCredit({ type: "phone", quantity: 1 });
+        markCreditRevealed(id, "phone");
+      }
+
+      setVisibleEmails((prev) => ({
+        ...prev,
+        [id]: true,
+      }));
+      setVisiblePhoneNumber((prev) => ({
+        ...prev,
+        [id]: true,
+      }));
+
+      await axios.post(
+        `${BASE_URL}/api/saved/add`,
+        { savedItems: [id], listNames: [] },
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+
+      useStore.getState().incrementDataRefreshKey();
+      queryClient.invalidateQueries({ queryKey: ["data"] });
+      queryClient.invalidateQueries({ queryKey: ["savedContacts"] });
+    } catch (error) {
+      toast.error(error?.response?.data?.message);
+    } finally {
+      setLoadingItemId(null);
+    }
+  };
+
+  /* ===============================
+     UI
+  =============================== */
+
+  return (
+    <div className="w-[94vw] mx-3 md:mx-4 mt-3 overflow-y-hidden right-company-section flex flex-col h-full">
+      <LeadRightTopbar data={data} counts={counts} totalLoading={totalLoading} isLoading={isLoading} />
+      <LeadSelectBar data={data} counts={counts} />
+
+      <div className="lead-table-div flex-1 overflow-x-auto overflow-y-auto border border-gray-300 rounded-lg relative bg-white shadow-sm min-h-0 no-y-scrollbar">
+        <LeadTable
+          handleMouseEnter={handleMouseEnter}
+          handleMouseLeave={handleMouseLeave}
+          data={sortedContacts}
+          error={fetchError}
+          isLoading={isLoading}
+          isEmailVisible={visibleEmails}
+          onEmailClick={handleRevealContact}
+          isPhoneVisible={visiblePhoneNumber}
+          onPhoneClick={handleRevealContact}
+          viewType={filters.viewType}
+          loadingItemId={loadingItemId || isCreditDeducting}
+          setDataItem={setDataItem}
+          showEmailStatus={filters.emailStatus?.length > 0}
+        />
+      </div>
+
+      <Pagination data={data?.counts} counts={counts} totalLoading={totalLoading} />
+    </div>
+  );
+};
+
+export default LeadRightSec;

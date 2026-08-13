@@ -1,0 +1,343 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-display: "Helvetica Neue", "Neue Haas Grotesk", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", monospace;
+  
+  --color-bg: #F0EEE8;
+  --color-bg-elevated: #E8E6DF;
+  --color-bg-inset: #ECEAE3;
+  
+  --color-text-primary: #111111;
+  --color-text-secondary: #444444;
+  --color-text-muted: #888888;
+  
+  --color-bg-dark: #0A0A0A;
+  --color-bg-dark-elevated: #141414;
+  --color-text-on-dark: #E8E6E0;
+  --color-text-on-dark-muted: #888888;
+}
+
+/* ── CUSTOM CLASSES (Aesthetic DNA & CSS Recipes) ── */
+
+/* Style A: Dark Pill Button */
+.btn-dark-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 24px;
+  border-radius: 9999px;
+  background-color: #1A1A1A;
+  color: #FFFFFF;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.btn-dark-pill:hover {
+  background-color: #333333;
+  transform: translateY(-1px);
+}
+
+.btn-dark-pill:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+/* Uppercase variant (for "CONTACT ↗" style) */
+.btn-dark-pill-uppercase {
+  composes: btn-dark-pill;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+/* Style B: Apple Liquid Glass Button */
+.liquid-glass-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 28px;
+  border-radius: 9999px;
+  color: rgba(255, 255, 255, 0.95);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  backdrop-filter: blur(30px) saturate(200%);
+  -webkit-backdrop-filter: blur(30px) saturate(200%);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.28),
+    rgba(255, 255, 255, 0.08)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.40),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.08),
+    0 8px 32px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  filter: drop-shadow(0 8px 30px rgba(255, 255, 255, 0.12));
+}
+
+/* Reflection layer */
+.liquid-glass-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    120deg,
+    rgba(255, 255, 255, 0.65) 0%,
+    rgba(255, 255, 255, 0.15) 30%,
+    transparent 60%
+  );
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+/* Refraction edge */
+.liquid-glass-btn::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  border-top: 1px solid rgba(255, 255, 255, 0.50);
+  border-left: 1px solid rgba(255, 255, 255, 0.25);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+/* Hover */
+.liquid-glass-btn:hover {
+  transform: translateY(-3px) scale(1.03);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.35),
+    rgba(255, 255, 255, 0.12)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 16px 40px rgba(0, 0, 0, 0.25);
+}
+
+.liquid-glass-btn:active {
+  transform: translateY(-1px) scale(0.98);
+}
+
+/* Dark surface variant — slightly more opaque */
+.liquid-glass-btn-dark {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 28px;
+  border-radius: 9999px;
+  color: rgba(255, 255, 255, 0.95);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  backdrop-filter: blur(30px) saturate(200%);
+  -webkit-backdrop-filter: blur(30px) saturate(200%);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.16),
+    rgba(255, 255, 255, 0.04)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.30),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05),
+    0 8px 32px rgba(0, 0, 0, 0.40);
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.liquid-glass-btn-dark::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    120deg,
+    rgba(255, 255, 255, 0.4) 0%,
+    rgba(255, 255, 255, 0.1) 30%,
+    transparent 60%
+  );
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.liquid-glass-btn-dark::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  border-top: 1px solid rgba(255, 255, 255, 0.30);
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.liquid-glass-btn-dark:hover {
+  transform: translateY(-3px) scale(1.03);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.22),
+    rgba(255, 255, 255, 0.06)
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 16px 40px rgba(0, 0, 0, 0.50);
+}
+
+/* Style C: Ghost Button */
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 20px;
+  border-radius: 9999px;
+  background: transparent;
+  color: #111111;
+  font-weight: 500;
+  font-size: 14px;
+  border: 1px solid rgba(17, 17, 17, 0.2);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-ghost:hover {
+  background: rgba(17, 17, 17, 0.05);
+  border-color: rgba(17, 17, 17, 0.35);
+}
+
+.btn-ghost:active {
+  transform: scale(0.97);
+}
+
+/* Standard glass card (dark overlay context) */
+.glass-card {
+  background: rgba(15, 15, 15, 0.55);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+}
+
+/* Light glass (on cream bg — subtle lift) */
+.glass-card-light {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.70);
+  border-radius: 16px;
+  box-shadow: 0 4px 24px rgba(17, 17, 17, 0.06);
+}
+
+/* Elevated glass (modals, command palette) */
+.glass-elevated {
+  background: rgba(18, 18, 18, 0.88);
+  backdrop-filter: blur(40px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 20px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.5),
+    0 24px 64px rgba(0, 0, 0, 0.5);
+}
+
+/* Sidebar ghost panel */
+.glass-ghost-panel {
+  background: rgba(240, 238, 232, 0.06);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+}
+
+/* Close button circle */
+.glass-circle-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(80, 80, 80, 0.35);
+  backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 4px 16px rgba(0, 0, 0, 0.30);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.glass-circle-btn:hover {
+  background: rgba(100, 100, 100, 0.45);
+  transform: scale(1.05);
+}
+
+/* Skeletons */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(17,17,17,0.05) 25%,
+    rgba(17,17,17,0.10) 50%,
+    rgba(17,17,17,0.05) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite linear;
+  border-radius: 4px;
+}
+
+.skeleton-dark {
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.04) 25%,
+    rgba(255,255,255,0.08) 50%,
+    rgba(255,255,255,0.04) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite linear;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(17, 17, 17, 0.15);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(17, 17, 17, 0.3);
+}
+
+/* Additional layout resets */
+html {
+  scroll-behavior: smooth;
+}
+
+section[id] {
+  scroll-margin-top: 4rem;
+}
+
+body {
+  background-color: #F0EEE8;
+  color: #111111;
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+}

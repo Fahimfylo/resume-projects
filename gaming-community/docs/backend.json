@@ -1,0 +1,80 @@
+{
+  "title": "NEXUS API — Data Schema",
+  "version": "2.0",
+  "storage": "MongoDB + Mongoose",
+  "auth": "JWT (Access + Refresh Token rotation)",
+
+  "models": {
+    "User": {
+      "description": "Gamer identity and auth credentials.",
+      "fields": {
+        "email": { "type": "String", "unique": true, "required": true },
+        "passwordHash": { "type": "String", "required": true, "hidden": true },
+        "gamerTag": { "type": "String", "unique": true, "sparse": true },
+        "gamerBio": { "type": "String" },
+        "avatarUrl": { "type": "String" },
+        "gamingPreferences": { "type": ["String"] },
+        "rank": { "type": "String", "enum": ["NOVICE", "ELITE", "MYTHIC", "LEGEND"], "default": "NOVICE" },
+        "level": { "type": "Number", "default": 1 },
+        "stats": {
+          "winRate": "Number",
+          "kdRatio": "Number",
+          "matches": "Number"
+        },
+        "refreshToken": { "type": "String", "hidden": true }
+      }
+    },
+    "GameSession": {
+      "description": "Single gaming session log with optional AI insights.",
+      "fields": {
+        "userId": { "type": "ObjectId", "ref": "User", "required": true, "indexed": true },
+        "gameName": { "type": "String", "required": true },
+        "gameType": { "type": "String" },
+        "summary": { "type": "String" },
+        "timestamp": { "type": "Date", "default": "now" },
+        "aiInsights": {
+          "summary": "String",
+          "strengths": ["String"],
+          "weaknesses": ["String"],
+          "recommendations": ["String"]
+        }
+      }
+    },
+    "Group": {
+      "description": "Gaming clan/guild.",
+      "fields": {
+        "name": { "type": "String", "unique": true, "required": true },
+        "description": { "type": "String" },
+        "owner": { "type": "ObjectId", "ref": "User", "required": true },
+        "members": [{ "type": "ObjectId", "ref": "User" }],
+        "logoUrl": { "type": "String" },
+        "stats": { "wins": "Number", "losses": "Number", "totalMatches": "Number" }
+      }
+    },
+    "Post": {
+      "description": "Social feed post with likes and comments.",
+      "fields": {
+        "userId": { "type": "ObjectId", "ref": "User", "required": true, "indexed": true },
+        "content": { "type": "String", "required": true },
+        "image": { "type": "String" },
+        "likes": [{ "type": "ObjectId", "ref": "User" }],
+        "comments": [{
+          "userId": { "type": "ObjectId", "ref": "User" },
+          "content": "String",
+          "createdAt": "Date"
+        }]
+      }
+    }
+  },
+
+  "apiEndpoints": {
+    "auth": ["POST /api/auth/register", "POST /api/auth/login", "POST /api/auth/logout", "POST /api/auth/refresh", "GET /api/auth/me"],
+    "users": ["GET /api/users/profile", "PUT /api/users/profile"],
+    "sessions": ["GET /api/sessions", "POST /api/sessions", "GET /api/sessions/:id", "DELETE /api/sessions/:id"],
+    "insights": ["POST /api/sessions/:id/analyze", "GET /api/sessions/:id/insights"],
+    "groups": ["GET /api/groups", "GET /api/groups/leaderboard", "GET /api/groups/:id", "POST /api/groups", "POST /api/groups/:id/join", "POST /api/groups/:id/leave", "DELETE /api/groups/:id"],
+    "posts": ["GET /api/posts", "GET /api/posts/:id", "POST /api/posts", "DELETE /api/posts/:id", "POST /api/posts/:id/like", "POST /api/posts/:id/unlike", "POST /api/posts/:id/comments", "DELETE /api/posts/:id/comments/:commentId"],
+    "upload": ["POST /api/upload/avatar"],
+    "analytics": ["GET /api/analytics"]
+  }
+}

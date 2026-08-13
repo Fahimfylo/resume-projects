@@ -1,0 +1,10 @@
+const FullScreenLoader = () => {
+  return (
+    <div className="fullscreen-loader">
+      <div className="loader-sushi">Sushimoto</div>
+      <div className="spinner"></div>
+    </div>
+  );
+};
+
+export default FullScreenLoader;

@@ -1,0 +1,897 @@
+const contacts_v5 = require("../models/Contacts");
+
+const FilterMetadata = require("../models/FilterMetadata");
+
+const SharedSearch = require("../models/SharedSearch");
+
+const SavedItem = require("../models/SavedItem");
+
+const SavedContacts = require("../models/SavedContacts");
+
+const redisClient = require("../redisClient");
+
+const { executeSearch, executeSearchCount, executeCompanySearch, getCompanyFilterIndex } = require("../services/searchService");
+
+const { exportContactsToCsv } = require("../services/exportService");
+
+const { generateCacheKey } = require("../utils/searchQueryBuilder");
+
+// ── Local helpers for suggestion query transforms ──────────────────────────
+const toProperCase = (v) => String(v).replace(/\b\w/g, (c) => c.toUpperCase());
+const toLower = (v) => String(v).toLowerCase();
+
+// Redis cache helper for suggestion endpoints (short TTL — 60s)
+const suggestionCacheKey = (prefix, query) => `suggest:${prefix}:${toLower(query)}`;
+const getSuggestionCache = async (key) => {
+  try {
+    const val = await redisClient.get(key);
+    return val ? JSON.parse(val) : null;
+  } catch { return null; }
+};
+const setSuggestionCache = async (key, data) => {
+  try { await redisClient.set(key, JSON.stringify(data), { EX: 60 }); } catch {}
+};
+
+const searchController = {
+
+  // --- Main search (results only, no count) ---
+
+  search: async (req, res) => {
+
+    try {
+
+      const userId = req.workspaceOwner;
+
+      const { filters = {}, excludedFilters = {} } = req.body;
+
+      // Feature access check: validate filters against user's plan limits
+      const User = require("../models/User");
+      const Plan = require("../models/Plans");
+      const CustomPlan = require("../models/CustomPlan");
+      const user = await User.findById(userId).select("limits plan planType");
+      let userLimits = user?.limits || {};
+      if (!Object.values(userLimits).some(Boolean) && user?.plan) {
+        const PlanModel = user.planType === "custom" ? CustomPlan : Plan;
+        const plan = await PlanModel.findById(user.plan).select("features.limits");
+        userLimits = plan?.features?.limits || {};
+      };
+      const filterFeatureMap = {
+        technologies: "technologyFilter",
+        revenueRange: "revenueFilter",
+        revenueThousands: "revenueFilter",
+      };
+      const usedFilters = Object.keys(filters).filter((key) => {
+        const val = filters[key];
+        if (Array.isArray(val)) return val.length > 0;
+        if (typeof val === "string") return val.trim() !== "";
+        return val != null;
+      });
+      const blockedFilters = usedFilters.filter(
+        (key) => filterFeatureMap[key] && !userLimits[filterFeatureMap[key]],
+      );
+      if (blockedFilters.length > 0) {
+        const missingFeatures = [...new Set(blockedFilters.map((k) => filterFeatureMap[k]))];
+        return res.status(403).json({
+          success: false,
+          message: `Your plan does not include: ${missingFeatures.join(", ")}. Please upgrade your plan to access this feature.`,
+          code: "FEATURE_NOT_AVAILABLE",
+          missingFeatures,
+        });
+      }
+
+      const debugMode = req.query?.debug === "1";
+
+      const forceRefresh = req.query?.refresh === "1" || req.query?.noCache === "1";
+
+
+
+      const finalResponse = await executeSearch({
+
+        userId,
+
+        filters,
+
+        excludedFilters,
+
+        debugMode,
+
+        forceRefresh,
+
+      });
+
+
+
+      res.status(200).json(finalResponse);
+
+    } catch (error) {
+
+      console.error("❌ Search Error:", error);
+
+      res.status(500).json({ error: "Search failed", message: error.message });
+
+    }
+
+  },
+
+  // --- Search count (separate endpoint, cached) ---
+
+  getSearchCount: async (req, res) => {
+    try {
+      const userId = req.workspaceOwner;
+      const { filters = {}, excludedFilters = {} } = req.body;
+
+      const result = await executeSearchCount({ userId, filters, excludedFilters });
+
+      res.status(200).json(result);
+    } catch (error) {
+      console.error("❌ Search Count Error:", error);
+      res.status(500).json({ error: "Search count failed", message: error.message });
+    }
+  },
+
+  // --- Batch search (cursor-based, no cache, no hydrate) ---
+
+  searchBatch: async (req, res) => {
+    try {
+      const userId = req.workspaceOwner;
+      const { filters = {}, excludedFilters = {} } = req.body;
+
+      filters.batchMode = true;
+
+      const result = await executeSearch({ userId, filters, excludedFilters });
+
+      res.status(200).json(result);
+    } catch (error) {
+      console.error("❌ Batch Search Error:", error);
+      res.status(500).json({ error: "Batch search failed", message: error.message });
+    }
+  },
+
+  searchBatchNext: async (req, res) => {
+    try {
+      const userId = req.workspaceOwner;
+      const { filters = {}, excludedFilters = {}, cursor } = req.body;
+
+      filters.cursor = cursor;
+      filters.batchMode = true;
+      filters.limit = 25;
+
+      const result = await executeSearch({ userId, filters, excludedFilters });
+
+      res.status(200).json(result);
+    } catch (error) {
+      console.error("❌ Batch Next Error:", error);
+      res.status(500).json({ error: "Batch next failed", message: error.message });
+    }
+  },
+
+
+
+  getTotalContacts: async (req, res) => {
+
+    try {
+
+      const total = await contacts_v5.estimatedDocumentCount();
+
+      res.status(200).json({ total });
+
+    } catch (error) {
+
+      console.error(error);
+
+      res.status(500).json({ error: "Internal Server Error" });
+
+    }
+
+  },
+
+
+
+  getItemDetailsByIds: async (req, res) => {
+
+    try {
+
+      const { ids } = req.body;
+
+      if (!ids || !Array.isArray(ids)) {
+
+        return res.status(400).json({ error: "IDs array is required" });
+
+      }
+
+
+
+      const contacts = await contacts_v5.find({ _id: { $in: ids } });
+
+      res.status(200).json(contacts);
+
+    } catch (error) {
+
+      console.error("Error fetching items by IDs:", error);
+
+      res.status(500).json({ error: "Internal Server Error" });
+
+    }
+
+  },
+
+
+
+  findLeads: async (req, res) => {
+
+    try {
+
+      const { name, company, linkedin, email } = req.query;
+
+
+
+
+      if (!name && !company && !linkedin && !email) {
+
+        return res
+
+          .status(400)
+
+          .json({ error: "At least one search criterion is required." });
+
+      }
+
+
+
+      const filters = {};
+
+
+
+      if (name) {
+
+        filters.personName = name;
+
+      }
+
+
+
+      if (company) {
+
+        filters.organizationName = company;
+
+      }
+
+
+
+      if (linkedin) {
+
+        const raw = String(linkedin).trim();
+
+        const stripped = raw
+
+          .replace(/^https?:\/\//i, "")
+
+          .replace(/^www\./i, "")
+
+          .replace(/\/?$/g, "");
+
+        const parts = stripped.split("/").filter(Boolean);
+
+        const username = parts.length > 0 ? parts[parts.length - 1] : stripped;
+
+
+
+        const variants = Array.from(
+
+          new Set([raw, stripped, username].filter(Boolean)),
+
+        );
+
+
+
+        filters.personLinkedinUrl = variants;
+
+        filters.organizationLinkedinUrl = variants;
+
+      }
+
+
+
+      if (email) {
+
+        filters.personEmail = String(email).trim().toLowerCase();
+
+      }
+
+
+
+      filters.limit = 20;
+
+      req.body = { ...req.body, filters };
+
+
+
+      // Manually trigger unified search since it abstracts the ES fetch logic
+
+      const finalResponse = await executeSearch({
+
+        userId: req.user ? req.user.userId : null,
+
+        filters,
+
+        excludedFilters: {},
+
+        debugMode: req.query?.debug === "1",
+
+        forceRefresh: false,
+
+      });
+
+
+
+      return res.status(200).json(finalResponse);
+
+    } catch (error) {
+
+      console.error("Error in findLeads:", error);
+
+      res.status(500).json({ error: "Internal Server Error" });
+
+    }
+
+  },
+
+
+
+  getFilterCounts: async (req, res) => {
+
+    try {
+
+      const { filterType } = req.query;
+
+
+
+      let query = {};
+
+      if (filterType) {
+
+        query.filterType = filterType;
+
+      }
+
+
+
+      const counts = await FilterMetadata.find(query)
+
+        .sort({ count: -1 })
+
+        .limit(100)
+
+        .lean();
+
+
+
+      const grouped = counts.reduce((acc, curr) => {
+
+        if (!acc[curr.filterType]) acc[curr.filterType] = [];
+
+        acc[curr.filterType].push({ value: curr.value, count: curr.count });
+
+        return acc;
+
+      }, {});
+
+
+
+      res.status(200).json(grouped);
+
+    } catch (error) {
+
+      console.error("Error fetching filter counts:", error);
+
+      res.status(500).json({ error: "Internal Server Error" });
+
+    }
+
+  },
+
+
+
+  exportContactsCsv: async (req, res) => {
+
+    return await exportContactsToCsv(req.body, res);
+
+  },
+
+
+
+  // --- Share Search State ---
+
+  saveShareState: async (req, res) => {
+
+    try {
+
+      // Multi-tenant: scope shared searches to workspace owner
+
+      const userId = req.workspaceOwner;
+
+      const { filters, excludedFilters, visibleColumns } = req.body;
+
+
+
+      const shareId =
+
+        Math.random().toString(36).substring(2, 8) + Date.now().toString(36);
+
+
+
+      const sharedSearch = new SharedSearch({
+
+        shareId,
+
+        userId,
+
+        filters,
+
+        excludedFilters,
+
+        visibleColumns,
+
+      });
+
+
+
+      await sharedSearch.save();
+
+
+
+      // Use CLIENT_URL or FRONTEND_URL from environment, fallback to request host
+
+      const frontendUrl = process.env.CLIENT_URL || process.env.FRONTEND_URL;
+
+      
+
+      if (!frontendUrl && process.env.NODE_ENV === "production") {
+
+        console.error("⚠️ WARNING: CLIENT_URL/FRONTEND_URL not set in production! Share links will use server host.");
+
+      }
+
+
+
+      const finalUrl = frontendUrl || `${req.protocol}://${req.get("host")}`;
+
+
+
+      const page = filters?.currentPage || 1;
+
+      const limit = filters?.limit || 25;
+
+
+
+      res.json({
+
+        shareId,
+
+        url: `${finalUrl}/search?s=${shareId}&page=${page}&limit=${limit}`,
+
+      });
+
+    } catch (error) {
+
+      console.error("Error saving share state:", error);
+
+      res.status(500).json({ error: "Failed to save share state" });
+
+    }
+
+  },
+
+
+
+  getCitySuggestions: async (req, res) => {
+    try {
+      const { query } = req.query;
+      if (!query || query.length < 1) {
+        return res.status(200).json({ suggestions: [] });
+      }
+
+      const cacheKey = suggestionCacheKey("city", query);
+      const cached = await getSuggestionCache(cacheKey);
+      if (cached) return res.status(200).json({ suggestions: cached });
+
+      const pattern = (toProperCase(query.trim()));
+      const docs = await contacts_v5.find({
+        $or: [
+          { '_source.person_location_city': { $gte: pattern, $lt: pattern + '\uffff' } },
+          { '_source.person_location_state': { $gte: pattern, $lt: pattern + '\uffff' } },
+        ]
+      }, {
+        '_source.person_location_city': 1,
+        '_source.person_location_state': 1,
+      }).limit(100).lean();
+
+      const suggestions = [...new Set(docs.flatMap(d =>
+        [d._source?.person_location_city, d._source?.person_location_state].filter(Boolean)
+      ))].slice(0, 10);
+
+      await setSuggestionCache(cacheKey, suggestions);
+      res.status(200).json({ suggestions });
+
+    } catch (error) {
+      console.error("Error fetching city suggestions:", error);
+      res.status(500).json({ error: "Failed to fetch city suggestions" });
+    }
+  },
+
+
+
+  getCompanyDomainSuggestions: async (req, res) => {
+    try {
+      let { query } = req.query;
+      if (!query || query.length < 2) {
+        return res.status(200).json({ suggestions: [] });
+      }
+
+      const cacheKey = suggestionCacheKey("domain", query);
+      const cached = await getSuggestionCache(cacheKey);
+      if (cached) return res.status(200).json({ suggestions: cached });
+
+      const trimmed = query.trim();
+      let cleanQuery = trimmed;
+      if (trimmed.includes(".") || trimmed.startsWith("http")) {
+        try {
+          let urlStr = trimmed;
+          if (!urlStr.startsWith("http://") && !urlStr.startsWith("https://")) {
+            urlStr = "https://" + urlStr;
+          }
+          const url = new URL(urlStr);
+          cleanQuery = url.hostname.replace(/^www\./, "").toLowerCase();
+        } catch {
+          const match = trimmed.match(/(?:https?:\/\/)?(?:www\.)?([^/?]+)/i);
+          if (match) cleanQuery = match[1].replace(/^www\./, "").toLowerCase();
+        }
+      }
+
+      const isDomainQuery = cleanQuery.includes(".");
+      const rawQuery = cleanQuery.trim();
+      const rangePattern = isDomainQuery ? rawQuery : toLower(rawQuery);
+
+      const matchField = isDomainQuery
+        ? [{ '_source.organization_domain': { $gte: rangePattern, $lt: rangePattern + '\uffff' } }]
+        : [{ '_source.organization_name': { $gte: rangePattern, $lt: rangePattern + '\uffff' } }];
+
+      const docs = await contacts_v5.find({
+        $or: matchField
+      }, {
+        '_source.organization_name': 1,
+        '_source.organization_domain': 1,
+        '_source.organization_website_url': 1,
+      }).limit(20).lean();
+
+      const seen = new Set();
+      const suggestions = docs
+        .map(d => d._source)
+        .filter(s => {
+          const key = s?.organization_name || s?.organization_domain;
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, 10)
+        .map(s => ({
+          name: s?.organization_name || s?.organization_domain || '',
+          domain: s?.organization_domain || s?.organization_website_url || '',
+          employeeCount: 0,
+        }));
+
+      await setSuggestionCache(cacheKey, suggestions);
+      res.status(200).json({ suggestions });
+
+    } catch (error) {
+      console.error("Error fetching company domain suggestions:", error);
+      res.status(500).json({ error: "Failed to fetch company domain suggestions" });
+    }
+  },
+
+
+
+  getKeywordsSuggestions: async (req, res) => {
+    try {
+      const { query } = req.query;
+      if (!query || query.length < 2) {
+        return res.status(200).json({ suggestions: [] });
+      }
+
+      const cacheKey = suggestionCacheKey("keywords", query);
+      const cached = await getSuggestionCache(cacheKey);
+      if (cached) return res.status(200).json({ suggestions: cached });
+
+      const pattern = query.trim().toLowerCase();
+      const docs = await contacts_v5.find({
+        '_source.organization_keywords': { $gte: pattern, $lt: pattern + '\uffff' }
+      }, {
+        '_source.organization_keywords': 1,
+      }).limit(50).lean();
+
+      const keywords = [...new Set(
+        docs.flatMap(d => Array.isArray(d._source?.organization_keywords) ? d._source.organization_keywords : [])
+      )].slice(0, 10);
+
+      await setSuggestionCache(cacheKey, keywords);
+      res.status(200).json({ suggestions: keywords });
+
+    } catch (error) {
+      console.error("Error fetching keywords suggestions:", error);
+      res.status(500).json({ error: "Failed to fetch keywords suggestions" });
+    }
+  },
+
+
+
+  getIndustrySuggestions: async (req, res) => {
+    try {
+      const { query } = req.query;
+      if (!query || query.length < 2) {
+        return res.status(200).json({ suggestions: [] });
+      }
+
+      const cacheKey = suggestionCacheKey("industry", query);
+      const cached = await getSuggestionCache(cacheKey);
+      if (cached) return res.status(200).json({ suggestions: cached });
+
+      const pattern = query.trim().toLowerCase();
+      const docs = await contacts_v5.find({
+        '_source.organization_industries': { $gte: pattern, $lt: pattern + '\uffff' }
+      }, {
+        '_source.organization_industries': 1,
+      }).limit(50).lean();
+
+      const suggestions = [...new Set(
+        docs.flatMap(d => {
+          const val = d._source?.organization_industries;
+          return Array.isArray(val) ? val : [val];
+        }).filter(Boolean)
+      )].slice(0, 10);
+
+      await setSuggestionCache(cacheKey, suggestions);
+      res.status(200).json({ suggestions });
+
+    } catch (error) {
+      console.error("Error fetching industry suggestions:", error);
+      res.status(500).json({ error: "Failed to fetch industry suggestions" });
+    }
+  },
+
+  getPersonNameSuggestions: async (req, res) => {
+    try {
+      const { query } = req.query;
+      if (!query || query.length < 2) {
+        return res.status(200).json({ suggestions: [] });
+      }
+
+      const cacheKey = suggestionCacheKey("name", query);
+      const cached = await getSuggestionCache(cacheKey);
+      if (cached) return res.status(200).json({ suggestions: cached });
+
+      // Stored names are lowercase — use range query (MongoDB Classic Engine breaks $regex prefix)
+      const input = query.trim().toLowerCase();
+      const words = input.split(/\s+/).filter(Boolean);
+      const matchCond = words.length === 1
+        ? { $or: [
+            { '_source.person_first_name_unanalyzed': { $gte: words[0], $lt: words[0] + '\uffff' } },
+            { '_source.person_last_name_unanalyzed':  { $gte: words[0], $lt: words[0] + '\uffff' } },
+          ]}
+        : { $and: [
+            { '_source.person_first_name_unanalyzed': { $gte: words[0], $lt: words[0] + '\uffff' } },
+            { '_source.person_last_name_unanalyzed':  { $gte: words.slice(1).join(' '), $lt: words.slice(1).join(' ') + '\uffff' } },
+          ]};
+      const docs = await contacts_v5.find(matchCond, {
+        '_source.person_first_name_unanalyzed': 1,
+        '_source.person_last_name_unanalyzed': 1,
+      }).limit(50).lean();
+
+      const names = [...new Set(
+        docs.map(d => {
+          const first = d._source?.person_first_name_unanalyzed || '';
+          const last = d._source?.person_last_name_unanalyzed || '';
+          return [first, last].filter(Boolean).join(' ');
+        }).filter(Boolean)
+      )].slice(0, 10);
+
+      await setSuggestionCache(cacheKey, names);
+      res.status(200).json({ suggestions: names });
+    } catch (error) {
+      console.error("Error fetching name suggestions:", error);
+      res.status(500).json({ error: "Failed to fetch name suggestions" });
+    }
+  },
+
+  getShareState: async (req, res) => {
+
+    try {
+
+      const { shareId } = req.params;
+
+
+
+      const sharedSearch = await SharedSearch.findOne({ shareId });
+
+      if (!sharedSearch) {
+
+        return res.status(404).json({ error: "Share not found" });
+
+      }
+
+
+
+      res.json({
+
+        filters: sharedSearch.filters,
+
+        excludedFilters: sharedSearch.excludedFilters,
+
+        visibleColumns: sharedSearch.visibleColumns,
+
+      });
+
+    } catch (error) {
+
+      console.error("Error retrieving share state:", error);
+
+      res.status(500).json({ error: "Failed to retrieve share state" });
+
+    }
+
+  },
+
+  getUniqueCompaniesCount: async (req, res) => {
+    try {
+      const userId = req.workspaceOwner;
+      const { filters = {} } = req.body;
+      const SavedCompanies = require("../models/SavedCompanies");
+      const CompaniesCache = require("../models/CompaniesCache");
+
+      // ── Cache check ──────────────────────────────────────────────────
+      const cacheKey = "company:count:" + generateCacheKey(userId, filters, {});
+      const cached = await redisClient.get(cacheKey).catch(() => null);
+      if (cached) {
+        return res.status(200).json(JSON.parse(cached));
+      }
+
+      const toArray = (v) => Array.isArray(v) ? v : (v != null ? [v] : []);
+
+      // Build query against CompaniesCache (deduplicated company-level collection)
+      const buildCacheQuery = (savedOnly) => {
+        const c = [];
+
+        // Default quality filter: Good+ (score >= 60)
+        const qualityThreshold = parseInt(filters.quality, 10);
+        if (!isNaN(qualityThreshold)) {
+          c.push({ quality_score: { $gte: qualityThreshold } });
+        } else if (filters.quality !== 'all') {
+          c.push({ quality_score: { $gte: 60 } });
+        }
+
+        const orgName = toArray(filters.organizationName || filters.company || []).filter(Boolean);
+        if (orgName.length) c.push({ $or: orgName.map(v => ({ $or: [{ normalized_name: { $gte: v.toLowerCase(), $lt: v.toLowerCase() + '\uffff' } }, { sanitized_organization_name_unanalyzed: { $gte: v.toLowerCase(), $lt: v.toLowerCase() + '\uffff' } }] })) });
+
+        const domain = toArray(filters.organizationDomain || []).filter(Boolean);
+        if (domain.length) c.push({ $or: domain.map(v => ({ organization_domain: { $gte: v, $lt: v + '\uffff' } })) });
+
+        const country = toArray(filters.country || []).filter(Boolean);
+        if (country.length) c.push({ organization_hq_location_country: { $in: country } });
+
+        const loc = toArray(filters.cityState || filters.location || []).filter(Boolean);
+        if (loc.length) {
+          const or = [];
+          for (const v of loc) { or.push({ organization_hq_location_city: { $gte: v, $lt: v + '\uffff' } }, { organization_hq_location_state: { $gte: v, $lt: v + '\uffff' } }); }
+          c.push({ $or: or });
+        }
+
+        const zip = toArray(filters.zip || []).filter(Boolean);
+        if (zip.length) c.push({ $or: zip.map(v => ({ organization_hq_location_postal_code: { $gte: v, $lt: v + '\uffff' } })) });
+
+        const ind = toArray(filters.industry || []).filter(Boolean);
+        if (ind.length) c.push({ organization_industries: { $in: ind.map(v => v.toLowerCase()) } });
+
+        const emp = toArray(filters.employeeRange || []).filter(Boolean);
+        if (emp.length) {
+          const rc = emp.map(r => {
+            const s = String(r).replace(/\s/g, ''); const cond = {};
+            if (/andmore/i.test(s) || s.endsWith('+')) { const num = parseInt(s.replace(/andmore/i, '').replace(/\+$/, ''), 10); if (!isNaN(num)) cond.$gte = num; }
+            else if (s.includes('-')) { const p = s.split('-').filter(Boolean); if (p.length === 2) { const mn = parseInt(p[0], 10), mx = parseInt(p[1], 10); if (!isNaN(mn)) cond.$gte = mn; if (!isNaN(mx)) cond.$lte = mx; } }
+            return Object.keys(cond).length ? { organization_num_current_employees: cond } : null;
+          }).filter(Boolean);
+          if (rc.length) c.push({ $or: rc });
+        }
+
+        const kw = toArray(filters.keywords || []).filter(Boolean);
+        if (kw.length) c.push({ $or: kw.map(v => ({ organization_relevant_keywords: { $gte: v, $lt: v + '\uffff' } })) });
+
+        if (savedOnly && savedOnly.length > 0) {
+          c.push({ _id: { $in: savedOnly } });
+        }
+
+        return c.length ? { $and: c } : {};
+      };
+
+      // Load saved company IDs for contextual counts
+      const savedCompanyDocs = await SavedCompanies
+        .find({ userId })
+        .select("companyId")
+        .lean()
+        .catch(() => []);
+      const savedCompanyIds = savedCompanyDocs.map(d => d.companyId);
+
+      const cacheQuery = buildCacheQuery();
+      const savedCacheQuery = buildCacheQuery(savedCompanyIds);
+
+      const countHint = getCompanyFilterIndex(cacheQuery);
+      const countOpts = { maxTimeMS: 10000 };
+      if (countHint) countOpts.hint = countHint;
+
+      // Run total and saved counts in parallel
+      const [companiesTotal, savedCount] = await Promise.all([
+        CompaniesCache.countDocuments(cacheQuery, countOpts).catch(err => {
+          console.log("[CompanyCount] Total count timeout:", err.message);
+          return null;
+        }),
+        savedCompanyIds.length > 0
+          ? CompaniesCache.countDocuments(savedCacheQuery, countOpts).catch(err => {
+              console.log("[CompanyCount] Saved count timeout:", err.message);
+              return null;
+            })
+          : Promise.resolve(0),
+      ]);
+
+      const newCount = companiesTotal != null && savedCount != null
+        ? Math.max(0, companiesTotal - (savedCount || 0))
+        : null;
+
+      const responseData = {
+        total: companiesTotal,
+        saved: savedCount != null ? savedCount : 0,
+        new: newCount,
+      };
+
+      await redisClient.set(cacheKey, JSON.stringify(responseData), { EX: 600 }).catch(() => {});
+
+      res.status(200).json(responseData);
+    } catch (error) {
+      console.error("Error getting unique companies count:", error);
+      res.status(500).json({ error: "Failed to get companies count", details: error.message });
+    }
+  },
+
+  // Get exact unique companies count
+  getExactUniqueCompaniesCount: async (req, res) => {
+    try {
+      req.body.exact = true;
+      return await searchController.getUniqueCompaniesCount(req, res);
+    } catch (error) {
+      console.error("Error getting exact companies count:", error);
+      res.status(500).json({ error: "Failed to get exact count", details: error.message });
+    }
+  },
+
+  // ── Company search (deduplicated, aggregation-based) ──────────────────
+
+  searchCompanies: async (req, res) => {
+    try {
+      const userId = req.workspaceOwner;
+      const { filters = {} } = req.body;
+
+      const result = await executeCompanySearch({
+        userId,
+        filters,
+      });
+
+      res.status(200).json(result);
+    } catch (error) {
+      console.error("Error searching companies:", error);
+      res.status(500).json({ error: "Company search failed", message: error.message });
+    }
+  },
+
+};
+
+
+
+module.exports = searchController;
+

@@ -1,0 +1,350 @@
+🚀 Analyzing Zip Codes in ElasticSearch...
+📊 Path [organization_hq_location_postal_code]: 0 docs have this field
+📊 Path [raw_mongo_data.organization_hq_location_postal_code]: 0 docs have this field
+📊 Path [raw_mongo_data._source.organization_hq_location_postal_code]: 0 docs have this field
+📊 Path [person_location_postal_code]: 0 docs have this field
+📊 Path [raw_mongo_data.person_location_postal_code]: 0 docs have this field
+📊 Path [raw_mongo_data._source.person_location_postal_code]: 0 docs have this field
+
+🔍 Searching for specific zip: 'W1B 3HH'...
+✅ Found document with 'W1B 3HH'!
+📍 Exact location in JSON: null
+📄 Full Source of match: {
+  "first_name": "Siddhesh",
+  "last_name": "Jaitapkar",
+  "full_name": "Siddhesh Jaitapkar",
+  "title": "Managing Director & CEO",
+  "seniority": "c_suite",
+  "department": "managing director ceo",
+  "functions": [],
+  "email": "sjaitapkar@submitedgeseo.com",
+  "email_status": "Verified",
+  "phone": "1(866)503-2556",
+  "sanitized_phone": "+18665032556",
+  "linkedin_url": "http://www.linkedin.com/in/siddheshjaitapkar",
+  "state": "Texas",
+  "country": "United States",
+  "location": "Texas, United States",
+  "person_state": "Texas",
+  "company_name": "Submitedge",
+  "company_domain": "submitedgeseo.com",
+  "company_website": "http://www.submitedgeseo.com",
+  "company_facebook_url": "https://www.facebook.com/submitedgeseo",
+  "company_twitter_url": "http://twitter.com/submitedge",
+  "employee_count": 33,
+  "employee_range": "11-50",
+  "founded_year": 2007,
+  "linkedin_followers": 347,
+  "industry": "internet",
+  "industries": [
+    "internet"
+  ],
+  "keywords": [
+    "social media optimization",
+    "search engine optimization link building service social media optimization advanced link building search engine marketing online reputation management",
+    "online reputation management",
+    "advanced link building",
+    "link building service",
+    "search engine optimization",
+    "search engine marketing",
+    "internet",
+    "advertising",
+    "seo",
+    "information technology & services",
+    "search marketing",
+    "marketing",
+    "marketing & advertising",
+    "sem",
+    "enterprise software"
+  ],
+  "keywords_str": "social media optimization, search engine optimization link building service social media optimization advanced link building search engine marketing online reputation management, online reputation management, advanced link building, link building service, search engine optimization, search engine marketing, internet, advertising, seo, information technology & services, search marketing, marketing, marketing & advertising, sem, enterprise software",
+  "technologies": [
+    "gmail",
+    "google_apps",
+    "amplitude",
+    "apache",
+    "skype_widget",
+    "livechat",
+    "recaptcha",
+    "mobile_friendly",
+    "google_analytics",
+    "google_tag_manager"
+  ],
+  "company_description": "SubmitEdge is one of the best seo companies offering quality seo services. Improve ranking, traffic, sales & ROI of your products/services with seo comapny usa.",
+  "company_short_description": "Established in 2006, Submitedge is one of the leading companies in the field of Search engine optimization in India. We are a growing organization with more than 300 trained and skilled SEO professionals. The flagship company of Kush Infosystems Pvt. Ltd, Submitedge is globally recognized as one of the leading link building and SEO companies. Our presence has now expanded across the US and UK.\\\\As a company, we are equipped with a streamlined management structure and focus on delivering time bound results for our clients. Our experience in the industry has enabled us to adapt and modify our strategies to work according to the need and the niche of the client's business. Equipped with the right infrastructure and technological support, we are capable of meeting any challenging and urgent SEO requirements. The ISO 9001 certification is a proof of our continued commitment to the cause of high quality services.\\\\At Submitedge, we offer exactly what you want! \\\\US Office Address (Marketing):\\\\Submit Edge,\\Kush Infosystems Pvt. Ltd.,\\10777 Westheimer, Suit 1100\\Houston, TX 77042.\\USA.\\Toll Free US /Canada : +1 (866) 503-2556\\Fax : +1 (832) 553-2590\\\\UK Office :\\\\SubmitEdge\\Kush Infosystems Pvt. Ltd.\\3rd Floor\\207 Regent Street\\London\\W1B 3HH\\Call : 0-808-234-2383 \\Email : support@submitedge.com",
+  "job_functions": [
+    {
+      "name": "marketing",
+      "count": 2
+    },
+    {
+      "name": "entrepreneurship",
+      "count": 1
+    },
+    {
+      "name": "human_resources",
+      "count": 1
+    },
+    {
+      "name": "information_technology",
+      "count": 1
+    },
+    {
+      "name": "support",
+      "count": 1
+    },
+    {
+      "name": "sales",
+      "count": 1
+    },
+    {
+      "name": "arts_and_design",
+      "count": 2
+    }
+  ],
+  "job_functions_raw": {
+    "marketing": 2,
+    "entrepreneurship": 1,
+    "human_resources": 1,
+    "information_technology": 1,
+    "support": 1,
+    "sales": 1,
+    "arts_and_design": 2,
+    "accounting": 0,
+    "operations": 0,
+    "finance": 0,
+    "legal": 0,
+    "engineering": 0,
+    "business_development": 0,
+    "product_management": 0,
+    "consulting": 0,
+    "education": 0,
+    "administrative": 0,
+    "media_and_commmunication": 0,
+    "data_science": 0
+  },
+  "created_at": "2018-05-17T07:56:49.684Z",
+  "updated_at": "2018-06-06T17:51:44.144+00:00",
+  "source": "salesforce_lead",
+  "owner_id": "unassigned",
+  "raw_mongo_data": {
+    "_id": "5afd35c1f3e5bb262e41f9f0",
+    "_index": "contacts_v5",
+    "_type": "contact",
+    "_score": 1,
+    "_source": {
+      "person_name": "Siddhesh Jaitapkar",
+      "person_first_name_unanalyzed": "siddhesh",
+      "person_last_name_unanalyzed": "jaitapkar",
+      "person_name_unanalyzed_downcase": "siddhesh jaitapkar",
+      "person_title": "Managing Director & CEO",
+      "person_functions": [],
+      "person_seniority": "c_suite",
+      "person_email_status_cd": "Verified",
+      "person_extrapolated_email_confidence": 0,
+      "person_email": "sjaitapkar@submitedgeseo.com",
+      "person_phone": "1(866)503-2556",
+      "person_sanitized_phone": "+18665032556",
+      "person_email_analyzed": "sjaitapkar@submitedgeseo.com",
+      "person_linkedin_url": "http://www.linkedin.com/in/siddheshjaitapkar",
+      "person_detailed_function": "managing director ceo",
+      "person_title_normalized": "managing director ceo",
+      "primary_title_normalized_for_faceting": "Managing Director And CEO",
+      "organization_id": "54a1b8a874686942d3cf120b",
+      "organization_name": "Submitedge",
+      "organization_revenue_in_thousands_int": null,
+      "sanitized_organization_name_unanalyzed": "submitedge",
+      "organization_retail_location_count": 0,
+      "organization_public_symbol": null,
+      "organization_linkedin_company_size_tag_ids": [
+        "5567cd4a73696453e12f0000"
+      ],
+      "organization_founded_year": 2007,
+      "organization_alexa_ranking": null,
+      "organization_num_current_employees": 33,
+      "organization_relevant_keywords": [
+        "social media optimization",
+        "search engine optimization link building service social media optimization advanced link building search engine marketing online reputation management",
+        "online reputation management",
+        "advanced link building",
+        "link building service",
+        "search engine optimization",
+        "search engine marketing",
+        "internet",
+        "advertising",
+        "seo",
+        "information technology & services",
+        "search marketing",
+        "marketing",
+        "marketing & advertising",
+        "sem",
+        "enterprise software"
+      ],
+      "organization_relevant_keywords_str": "social media optimization, search engine optimization link building service social media optimization advanced link building search engine marketing online reputation management, online reputation management, advanced link building, link building service, search engine optimization, search engine marketing, internet, advertising, seo, information technology & services, search marketing, marketing, marketing & advertising, sem, enterprise software",
+      "organization_industries": [
+        "internet"
+      ],
+      "organization_linkedin_specialties": "social media optimization, search engine optimization link building service social media optimization advanced link building search engine marketing online reputation management, online reputation management, advanced link building, link building service, search engine optimization, search engine marketing, internet",
+      "organization_angellist_markets": "",
+      "organization_yelp_categories": "",
+      "organization_keywords": [
+        "social media optimization",
+        "search engine optimization link building service social media optimization advanced link building search engine marketing online reputation management",
+        "online reputation management",
+        "advanced link building",
+        "link building service",
+        "search engine optimization",
+        "search engine marketing"
+      ],
+      "organization_linkedin_industry_tag_ids": [
+        "5567cd4d736964397e020000"
+      ],
+      "organization_linkedin_specialty_tag_ids": [
+        "5567e81173696463f8510000",
+        "5a9ead88a6da98d98c6f2041",
+        "5567e81173696463f8500000",
+        "557024e97369643b14851f00",
+        "556eb8587369647b3ea90700",
+        "5567e1197369641d91650300",
+        "5567e0ef7369640e5ae10c00"
+      ],
+      "organization_angellist_market_tag_ids": [],
+      "organization_short_description": "Established in 2006, Submitedge is one of the leading companies in the field of Search engine optimization in India. We are a growing organization with more than 300 trained and skilled SEO professionals. The flagship company of Kush Infosystems Pvt. Ltd, Submitedge is globally recognized as one of the leading link building and SEO companies. Our presence has now expanded across the US and UK.\\\\As a company, we are equipped with a streamlined management structure and focus on delivering time bound results for our clients. Our experience in the industry has enabled us to adapt and modify our strategies to work according to the need and the niche of the client's business. Equipped with the right infrastructure and technological support, we are capable of meeting any challenging and urgent SEO requirements. The ISO 9001 certification is a proof of our continued commitment to the cause of high quality services.\\\\At Submitedge, we offer exactly what you want! \\\\US Office Address (Marketing):\\\\Submit Edge,\\Kush Infosystems Pvt. Ltd.,\\10777 Westheimer, Suit 1100\\Houston, TX 77042.\\USA.\\Toll Free US /Canada : +1 (866) 503-2556\\Fax : +1 (832) 553-2590\\\\UK Office :\\\\SubmitEdge\\Kush Infosystems Pvt. Ltd.\\3rd Floor\\207 Regent Street\\London\\W1B 3HH\\Call : 0-808-234-2383 \\Email : support@submitedge.com",
+      "organization_seo_description": "SubmitEdge is one of the best seo companies offering quality seo services. Improve ranking, traffic, sales & ROI of your products/services with seo comapny usa.",
+      "organization_website_url": "http://www.submitedgeseo.com",
+      "organization_angellist_url": null,
+      "organization_facebook_url": "https://www.facebook.com/submitedgeseo",
+      "organization_twitter_url": "http://twitter.com/submitedge",
+      "organization_languages": [
+        "English"
+      ],
+      "organization_num_languages": 1,
+      "organization_linkedin_numerical_urls": [
+        "http://www.linkedin.com/company/1010218"
+      ],
+      "organization_domain_status_cd": 1,
+      "organization_domain": "submitedgeseo.com",
+      "organization_domain_analyzed": "submitedgeseo.com",
+      "organization_phone": "(866) 503-2556",
+      "organization_all_possible_domains": [
+        "submitedgeseo.com"
+      ],
+      "organization_current_technologies": [
+        "gmail",
+        "google_apps",
+        "amplitude",
+        "apache",
+        "skype_widget",
+        "livechat",
+        "recaptcha",
+        "mobile_friendly",
+        "google_analytics",
+        "google_tag_manager"
+      ],
+      "organization_num_linkedin_followers": 347,
+      "job_functions": {
+        "marketing": 2,
+        "entrepreneurship": 1,
+        "human_resources": 1,
+        "information_technology": 1,
+        "support": 1,
+        "sales": 1,
+        "arts_and_design": 2,
+        "accounting": 0,
+        "operations": 0,
+        "finance": 0,
+        "legal": 0,
+        "engineering": 0,
+        "business_development": 0,
+        "product_management": 0,
+        "consulting": 0,
+        "education": 0,
+        "administrative": 0,
+        "media_and_commmunication": 0,
+        "data_science": 0
+      },
+      "person_location_city": null,
+      "person_location_city_with_state_or_country": null,
+      "person_location_state": "Texas",
+      "person_location_state_with_country": "Texas, US",
+      "person_location_country": "United States",
+      "person_location_postal_code": null,
+      "organization_hq_location_city": null,
+      "organization_hq_location_city_with_state_or_country": null,
+      "organization_hq_location_state": null,
+      "organization_hq_location_state_with_country": null,
+      "organization_hq_location_country": null,
+      "organization_hq_location_postal_code": null,
+      "modality": "contacts",
+      "organization_total_funding_long": null,
+      "organization_latest_funding_stage_cd": null,
+      "organization_latest_funding_round_amount_long": null,
+      "organization_latest_funding_round_date": null,
+      "string_typed_custom_fields": [],
+      "textarea_typed_custom_fields": [],
+      "number_typed_custom_fields": [],
+      "date_typed_custom_fields": [],
+      "datetime_typed_custom_fields": [],
+      "boolean_typed_custom_fields": [],
+      "picklist_typed_custom_fields": [],
+      "multipicklist_typed_custom_fields": [],
+      "label_ids": [],
+      "contact_label_ids": [],
+      "account_label_ids": [],
+      "account_stage_id": "5afcabd6079cc786d3211c84",
+      "account_id": "5afd35c8f3e5bb262e41fdb2",
+      "contact_emailer_campaign_ids": [],
+      "contact_prospect_import_ids": [],
+      "contact_email_verify_request_ids": [],
+      "contact_lead_request_id": null,
+      "contact_source": "salesforce_lead",
+      "salesforce_lead_id": "00QC000001ZvQhlMAF",
+      "salesforce_contact_id": null,
+      "account_owner_id": "unassigned",
+      "owner_id": "unassigned",
+      "contact_owner_id": "unassigned",
+      "prospected_by_team_ids": [
+        "5afcabd6079cc786d3211c79"
+      ],
+      "contact_unlocked": true,
+      "contact_email_replied": false,
+      "contact_email_clicked": false,
+      "contact_email_sent": false,
+      "contact_email_open": false,
+      "contact_email_unsubscribed": false,
+      "contact_email_spamblocked": false,
+      "contact_email_autoresponder": false,
+      "contact_demoed": false,
+      "contact_email_no_reply": false,
+      "contact_email_bounced": false,
+      "contact_stage_id": "5afcabd6079cc786d3211c7b",
+      "contact_created_at": "2018-05-17T07:56:49.684Z",
+      "contact_last_activity_date": "2017-05-08T00:00:00.000+00:00",
+      "contact_email_num_clicks": 0,
+      "contact_email_num_opens": 0,
+      "contact_engagement_score": 0,
+      "contact_campaign_statuses": [],
+      "contact_campaign_steps": [],
+      "contact_campaign_statuses_or_failure_reasons": [],
+      "contact_campaign_statuses_without_campaign_id": [],
+      "contact_campaign_send_from_aliases": [],
+      "contact_email_last_clicked_at": null,
+      "contact_email_last_opened_at": null,
+      "contact_phone_numbers": [
+        {
+          "sanitized_number": "+18665032556",
+          "status": "no_status",
+          "type": "other"
+        }
+      ],
+      "relavence_boost": 0,
+      "contact_has_pending_email_arcgate_request": false,
+      "indexed_at": "2018-06-06T17:51:44.144+00:00",
+      "predictive_scores": null,
+      "test_predictive_score": null,
+      "account_zenflow_project_ids": [],
+      "zenflow_project_ids": [],
+      "job_start_date": "2009-10-01"
+    }
+  }
+}

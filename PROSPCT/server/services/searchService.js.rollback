@@ -1,0 +1,1345 @@
+const { performance } = require("perf_hooks");
+const mongoose = require("mongoose");
+const contacts_v5 = require("../models/Contacts");
+const SavedItem = require("../models/SavedItem");
+const SavedContacts = require("../models/SavedContacts");
+const redisClient = require("../redisClient.js");
+const CompaniesCache = require("../models/CompaniesCache");
+const logger = require("../utils/logger");
+const parseNumber = require("../utils/parseNumber");
+const { getTotalCount } = require("../utils/totalCountCache");
+const { generateCacheKey, fieldConfig } = require("../utils/searchQueryBuilder");
+
+// ── ES→MongoDB field name mapping ─────────────────────────────────────────
+// Maps ES field names (used in fieldConfig) to the actual MongoDB _source
+// document field names. The MongoDB data uses snake_case throughout.
+const esToMongoField = {
+  company_country:              'person_location_country',
+  company_city:                 'person_location_city',
+  company_state:                'person_location_state',
+  company_postal_code:          'person_location_postal_code',
+  postal_code:                  'person_location_postal_code',
+  email_status:                 'person_email_status_cd',
+  person_gender:                'person_gender',
+  seniority:                    'person_seniority',
+  title:                        'person_title',
+  email:                        'person_email',
+  email_domain:                 'person_email_domain',
+  linkedin_url:                 'person_linkedin_url',
+  person_linkedin_url:          'person_linkedin_url',
+  company_name:                 'organization_name',
+  organization_name:            'organization_name',
+  company_domain:               'organization_domain',
+  organization_domain:          'organization_domain',
+  company_linkedin_url:         'organization_linkedin_url',
+  organization_linkedin_url:    'organization_linkedin_url',
+  company_website:              'organization_website_url',
+  website:                      'organization_website_url',
+  industry:                     'organization_industries',
+  technologies:                 'organization_current_technologies',
+  keywords:                     'organization_keywords',
+  employee_count:               'organization_num_current_employees',
+  employee_range:               'organization_num_current_employees',
+  revenue:                      'organization_revenue_in_thousands_int',
+  revenue_range:                'organization_revenue_in_thousands_int',
+  founded_year:                 'organization_founded_year',
+  organization_founded_year:    'organization_founded_year',
+  job_functions:                'job_functions',
+  mobile_phone:                 'person_phone',
+  company_phone:                'organization_phone',
+  company_address:              'organization_hq_location_city',
+  facebook_url:                 'organization_facebook_url',
+  twitter_url:                  'organization_twitter_url',
+};
+
+const toMongoPath = (esField) => {
+  // Strip .keyword suffix used in ES field references (e.g. "company_name.keyword")
+  const cleanField = esField.replace(/\.keyword$/, '');
+  const camel = esToMongoField[cleanField] || cleanField;
+  return `_source.${camel}`;
+};
+
+// ── Build a MongoDB query from the fieldConfig filter definitions ─────────
+function buildMongoQuery(filters, viewType, savedContactIds, listContactIds, excludedFilters = {}) {
+  const conditions = [];
+
+  Object.entries(filters).forEach(([key, values]) => {
+    const config = fieldConfig[key];
+    if (!config || !values) return;
+
+    const validValues = (Array.isArray(values) ? values : [values]).filter(
+      (v) => v !== undefined && v !== null && String(v).trim() !== "",
+    );
+    if (validValues.length === 0) return;
+
+    switch (config.type) {
+      case "keyword": {
+        const processed = config.transform
+          ? validValues.map(config.transform)
+          : validValues;
+        const esField = config.esField || key;
+        conditions.push({ [toMongoPath(esField)]: { $in: processed } });
+        break;
+      }
+      case "wildcard": {
+        const should = [];
+        const targetEsFields = config.esFields || (config.esField ? [config.esField] : [key]);
+        for (const val of validValues) {
+          const q = config.transform ? config.transform(val) : val;
+          if (config.usePrefix) {
+            const prefix = String(config.caseInsensitive ? q.toLowerCase() : q);
+            for (const esField of targetEsFields) {
+              should.push({ [toMongoPath(esField)]: { $gte: prefix, $lt: prefix + '\uffff' } });
+            }
+            continue;
+          }
+          // Non-prefix wildcard (substring/suffix): no current filter uses this path.
+          // $regex is broken by Classic Engine (forceClassicEngine) — returns 0.
+          // If a new filter needs this, convert to $expr: { $regexMatch: ... }.
+          const pattern = config.useSuffix ? `${escapeRegex(q)}$` : escapeRegex(q);
+          const regex = new RegExp(pattern, config.caseInsensitive ? 'i' : '');
+          for (const esField of targetEsFields) {
+            should.push({ [toMongoPath(esField)]: { $regex: regex } });
+          }
+        }
+        if (should.length) conditions.push({ $or: should });
+        break;
+      }
+      case "match":
+      case "match_phrase": {
+        const esField = config.esField || key;
+        const should = validValues.map(v => {
+          if (config.usePrefix) {
+            const prefix = String(config.caseInsensitive ? v.toLowerCase() : v);
+            return { [toMongoPath(esField)]: { $gte: prefix, $lt: prefix + '\uffff' } };
+          }
+          // Non-prefix match/match_phrase (substring): no current filter uses this path.
+          // $regex is broken by Classic Engine — returns 0.
+          const query = { $regex: escapeRegex(v) };
+          if (config.caseInsensitive) query.$options = 'i';
+          return { [toMongoPath(esField)]: query };
+        });
+        conditions.push({ $or: should });
+        break;
+      }
+      case "match_phrase_prefix": {
+        const esField = config.esField || key;
+        if (validValues[0].length > 2) {
+          if (esField === "full_name") {
+            const input = validValues[0].trim().toLowerCase();
+            const words = input.split(/\s+/).filter(Boolean);
+            if (words.length === 1) {
+              conditions.push({
+                $or: [
+                  { '_source.person_first_name_unanalyzed': { $gte: words[0], $lt: words[0] + '\uffff' } },
+                  { '_source.person_last_name_unanalyzed':  { $gte: words[0], $lt: words[0] + '\uffff' } },
+                ]
+              });
+            } else {
+              const firstPrefix = words[0];
+              const lastPrefix = words.slice(1).join(' ');
+              const andClauses = [
+                { '_source.person_first_name_unanalyzed': { $gte: firstPrefix, $lt: firstPrefix + '\uffff' } },
+              ];
+              if (lastPrefix) {
+                andClauses.push({ '_source.person_last_name_unanalyzed': { $gte: lastPrefix, $lt: lastPrefix + '\uffff' } });
+              }
+              conditions.push({ $and: andClauses });
+            }
+          } else {
+            const pattern = validValues[0].trim().toLowerCase();
+            conditions.push({ [toMongoPath(esField)]: { $gte: pattern, $lt: pattern + '\uffff' } });
+          }
+        }
+        break;
+      }
+      case "range": {
+        const esField = config.esField || key;
+        const divider = config.divider || 1;
+        const rangeConditions = validValues.map(range => {
+          if (typeof range === "object") {
+            const cond = {};
+            if (range.gte != null) cond.$gte = Number(range.gte) / divider;
+            if (range.lte != null) cond.$lte = Number(range.lte) / divider;
+            if (range.gt != null) cond.$gt = Number(range.gt) / divider;
+            if (range.lt != null) cond.$lt = Number(range.lt) / divider;
+            return Object.keys(cond).length ? { [toMongoPath(esField)]: cond } : null;
+          }
+          const cleanStr = String(range).replace(/[\$,€£\s]/g, "").trim();
+          if (cleanStr.toUpperCase() === "UNKNOWN") {
+            const kwField = config.rangeKeywordField || `${key}.keyword`;
+            return { [toMongoPath(kwField)]: "Unknown" };
+          }
+          const cond = {};
+          if (cleanStr.includes("andmore")) {
+            cond.$gte = parseNumber(cleanStr.replace("andmore", "")) / divider;
+          } else if (cleanStr.includes("-")) {
+            const parts = cleanStr.split("-").filter(p => p.trim());
+            if (parts.length === 2) {
+              const minVal = parseNumber(parts[0]);
+              const maxVal = parseNumber(parts[1]);
+              if (!Number.isNaN(minVal)) cond.$gte = minVal / divider;
+              if (!Number.isNaN(maxVal)) cond.$lte = maxVal / divider;
+            }
+          } else if (cleanStr.startsWith(">=")) {
+            cond.$gte = parseNumber(cleanStr.slice(2)) / divider;
+          } else if (cleanStr.startsWith("<=")) {
+            cond.$lte = parseNumber(cleanStr.slice(2)) / divider;
+          } else if (cleanStr.startsWith(">")) {
+            cond.$gt = parseNumber(cleanStr.slice(1)) / divider;
+          } else if (cleanStr.startsWith("<")) {
+            cond.$lt = parseNumber(cleanStr.slice(1)) / divider;
+          }
+          Object.keys(cond).forEach(k => { if (Number.isNaN(cond[k])) delete cond[k]; });
+          return Object.keys(cond).length ? { [toMongoPath(esField)]: cond } : null;
+        }).filter(Boolean);
+        if (rangeConditions.length) conditions.push({ $or: rangeConditions });
+        break;
+      }
+      case "location_search":
+      case "zip_search": {
+        const targetEsFields = config.esFields || [config.esField];
+        const should = [];
+        for (const val of validValues) {
+          const prefix = val;
+          const orClause = targetEsFields.map(esField => ({
+            [toMongoPath(esField)]: { $gte: prefix, $lt: prefix + '\uffff' }
+          }));
+          should.push({ $or: orClause });
+        }
+        if (should.length) conditions.push({ $or: should });
+        break;
+      }
+      case "domain_match": {
+        const esField = config.esField || key;
+        const should = [];
+        for (const val of validValues) {
+          const prefix = val;
+          should.push(
+            { [toMongoPath(esField)]: { $gte: prefix, $lt: prefix + '\uffff' } },
+            { [toMongoPath("company_website")]: { $gte: prefix, $lt: prefix + '\uffff' } }
+          );
+        }
+        if (should.length) conditions.push({ $or: should });
+        break;
+      }
+      case "exists": {
+        const targetEsFields = config.esFields || [config.esField];
+        const should = targetEsFields.map(esField => ({
+          [toMongoPath(esField)]: { $exists: true, $ne: null }
+        }));
+        conditions.push({ $or: should });
+        break;
+      }
+    }
+  });
+
+  // ── Excluded filters ────────────────────────────────────────────────────
+  Object.entries(excludedFilters).forEach(([key, values]) => {
+    const config = fieldConfig[key];
+    if (!config || !values) return;
+
+    const validValues = (Array.isArray(values) ? values : [values]).filter(
+      (v) => v !== undefined && v !== null && String(v).trim() !== "",
+    );
+    if (validValues.length === 0) return;
+
+    switch (config.type) {
+      case "keyword": {
+        const processed = config.transform
+          ? validValues.map(config.transform)
+          : validValues;
+        const esField = config.esField || key;
+        conditions.push({ [toMongoPath(esField)]: { $nin: processed } });
+        break;
+      }
+      case "wildcard": {
+        const should = [];
+        const targetEsFields = config.esFields || (config.esField ? [config.esField] : [key]);
+        for (const val of validValues) {
+          const q = config.transform ? config.transform(val) : val;
+          if (config.usePrefix) {
+            const prefix = String(config.caseInsensitive ? q.toLowerCase() : q);
+            for (const esField of targetEsFields) {
+              should.push({ [toMongoPath(esField)]: { $not: { $gte: prefix, $lt: prefix + '\uffff' } } });
+            }
+            continue;
+          }
+          // Non-prefix wildcard (substring/suffix): no current filter uses this path.
+          // $regex is broken by Classic Engine — returns 0.
+          const pattern = config.useSuffix ? `${escapeRegex(q)}$` : escapeRegex(q);
+          const regex = new RegExp(pattern, config.caseInsensitive ? 'i' : '');
+          for (const esField of targetEsFields) {
+            should.push({ [toMongoPath(esField)]: { $not: { $regex: regex } } });
+          }
+        }
+        if (should.length) conditions.push({ $and: should });
+        break;
+      }
+      case "match":
+      case "match_phrase": {
+        const esField = config.esField || key;
+        const should = validValues.map(v => {
+          if (config.usePrefix) {
+            const prefix = String(config.caseInsensitive ? v.toLowerCase() : v);
+            return { [toMongoPath(esField)]: { $not: { $gte: prefix, $lt: prefix + '\uffff' } } };
+          }
+          // Non-prefix match/match_phrase (substring): no current filter uses this path.
+          // $regex is broken by Classic Engine — returns 0.
+          return { [toMongoPath(esField)]: { $not: { $regex: escapeRegex(v), $options: config.caseInsensitive ? 'i' : '' } } };
+        });
+        conditions.push({ $and: should });
+        break;
+      }
+      case "range": {
+        const esField = config.esField || key;
+        const divider = config.divider || 1;
+        const rangeConditions = validValues.map(range => {
+          if (typeof range === "object") {
+            const cond = {};
+            if (range.gte != null) cond.$gte = Number(range.gte) / divider;
+            if (range.lte != null) cond.$lte = Number(range.lte) / divider;
+            if (range.gt != null) cond.$gt = Number(range.gt) / divider;
+            if (range.lt != null) cond.$lt = Number(range.lt) / divider;
+            return Object.keys(cond).length ? { [toMongoPath(esField)]: cond } : null;
+          }
+          const cleanStr = String(range).replace(/[\$,€£\s]/g, "").trim();
+          if (cleanStr.toUpperCase() === "UNKNOWN") {
+            const kwField = config.rangeKeywordField || `${key}.keyword`;
+            return { [toMongoPath(kwField)]: "Unknown" };
+          }
+          const cond = {};
+          if (cleanStr.includes("andmore")) {
+            cond.$gte = parseNumber(cleanStr.replace("andmore", "")) / divider;
+          } else if (cleanStr.includes("-")) {
+            const parts = cleanStr.split("-").filter(p => p.trim());
+            if (parts.length === 2) {
+              const minVal = parseNumber(parts[0]);
+              const maxVal = parseNumber(parts[1]);
+              if (!Number.isNaN(minVal)) cond.$gte = minVal / divider;
+              if (!Number.isNaN(maxVal)) cond.$lte = maxVal / divider;
+            }
+          } else if (cleanStr.startsWith(">=")) {
+            cond.$gte = parseNumber(cleanStr.slice(2)) / divider;
+          } else if (cleanStr.startsWith("<=")) {
+            cond.$lte = parseNumber(cleanStr.slice(2)) / divider;
+          } else if (cleanStr.startsWith(">")) {
+            cond.$gt = parseNumber(cleanStr.slice(1)) / divider;
+          } else if (cleanStr.startsWith("<")) {
+            cond.$lt = parseNumber(cleanStr.slice(1)) / divider;
+          }
+          Object.keys(cond).forEach(k => { if (Number.isNaN(cond[k])) delete cond[k]; });
+          return Object.keys(cond).length ? { [toMongoPath(esField)]: cond } : null;
+        }).filter(Boolean);
+        if (rangeConditions.length) conditions.push({ $nor: rangeConditions });
+        break;
+      }
+      case "location_search":
+      case "zip_search": {
+        const targetEsFields = config.esFields || [config.esField];
+        const should = [];
+        for (const val of validValues) {
+          const orClause = targetEsFields.map(esField => ({
+            [toMongoPath(esField)]: { $not: { $gte: val, $lt: val + '\uffff' } }
+          }));
+          should.push({ $and: orClause });
+        }
+        if (should.length) conditions.push({ $and: should });
+        break;
+      }
+      case "domain_match": {
+        const esField = config.esField || key;
+        const should = [];
+        for (const val of validValues) {
+          should.push(
+            { [toMongoPath(esField)]: { $not: { $gte: val, $lt: val + '\uffff' } } },
+            { [toMongoPath("company_website")]: { $not: { $gte: val, $lt: val + '\uffff' } } }
+          );
+        }
+        if (should.length) conditions.push({ $and: should });
+        break;
+      }
+      case "exists": {
+        const targetEsFields = config.esFields || [config.esField];
+        const should = targetEsFields.map(esField => ({
+          [toMongoPath(esField)]: { $exists: false }
+        }));
+        conditions.push({ $and: should });
+        break;
+      }
+    }
+  });
+
+  // ── foundedYear ─────────────────────────────────────────────────────────
+  if (filters.foundedYear && typeof filters.foundedYear === "object") {
+    const { minYear, maxYear } = filters.foundedYear;
+    const cond = {};
+    if (minYear) cond.$gte = parseInt(minYear, 10);
+    if (maxYear) cond.$lte = parseInt(maxYear, 10);
+    if (Object.keys(cond).length) {
+      conditions.push({
+        $or: [
+          { [toMongoPath("founded_year")]: cond },
+          { [toMongoPath("organization_founded_year")]: cond },
+        ]
+      });
+    }
+  }
+
+  // ── listContactIds ──────────────────────────────────────────────────────
+  if (listContactIds.length > 0) {
+    conditions.push({ _id: { $in: listContactIds } });
+  }
+
+  // ── viewType ────────────────────────────────────────────────────────────
+  if (viewType === "saved") {
+    conditions.push({ _id: { $in: savedContactIds } });
+  }
+  if (viewType === "new") {
+    conditions.push({ _id: { $nin: savedContactIds } });
+  }
+
+  return conditions.length > 0 ? { $and: conditions } : {};
+}
+
+function escapeRegex(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ── Index hint helper ──────────────────────────────────────────────────────
+// Returns a MongoDB hint object for the first safe-to-hint indexed field in
+// the query, or null if none exists.
+//
+// A "safe" field is one where a single filter value matches at most ~100k
+// documents — few enough that the in-memory _id sort stays under 100MB.
+// High-density filters (country, state, title) and multi-field $or queries
+// (name, city/state location) are excluded — they are faster with the
+// _id-index-scan path.
+function getFilterIndex(mongoQuery) {
+  if (!mongoQuery || Object.keys(mongoQuery).length === 0) 
+    return null;
+
+  // Multi-field $or check — hinting breaks $or semantics
+  const hasMultiFieldOr = (() => {
+    const scan = (v) => {
+      if (!v || typeof v !== 'object') return false;
+      if (Array.isArray(v)) return v.some(scan);
+      for (const k of Object.keys(v)) {
+        if (k === '$or' && Array.isArray(v[k]) && v[k].length > 1) {
+          const orFields = new Set();
+          for (const branch of v[k]) {
+            for (const bk of Object.keys(branch)) {
+              if (bk.startsWith('_source.')) orFields.add(bk);
+            }
+          }
+          if (orFields.size > 1) return true;
+        }
+        if (scan(v[k])) return true;
+      }
+      return false;
+    };
+    return scan(mongoQuery);
+  })();
+  if (hasMultiFieldOr) return null;
+
+  // Non-selective operator check
+  const hasNonSelective = (() => {
+    const scan = (v) => {
+      if (!v || typeof v !== 'object') return false;
+      if (Array.isArray(v)) return v.some(scan);
+      for (const k of Object.keys(v)) {
+        if (k === '$exists' || k === '$ne' || 
+            k === '$nin' || k === '$not') return true;
+        if (scan(v[k])) return true;
+      }
+      return false;
+    };
+    return scan(mongoQuery);
+  })();
+  if (hasNonSelective) return null;
+
+  // Collect all _source.* fields in the query
+  const fields = new Set();
+  const extract = (obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    if (Array.isArray(obj)) { obj.forEach(extract); return; }
+    for (const key of Object.keys(obj)) {
+      if (key.startsWith('_source.')) fields.add(key);
+      else if (['$and','$or','$nor'].includes(key)) 
+        extract(obj[key]);
+    }
+  };
+  extract(mongoQuery.$and || mongoQuery);
+  if (fields.size === 0) return null;
+
+  const has = (f) => fields.has(f);
+  const C  = '_source.person_location_country';
+  const S  = '_source.person_seniority';
+  const E  = '_source.person_email_status_cd';
+  const I  = '_source.organization_industries';
+  const CI = '_source.person_location_city';
+  const ST = '_source.person_location_state';
+
+  // ── Compound indexes (most specific first) ──────────────────────
+  
+  // 4-field: country+seniority+email_status+industries
+  if (has(C) && has(S) && has(E) && has(I)) {
+    return {
+      '_source.person_location_country': 1,
+      '_source.person_seniority': 1,
+      '_source.person_email_status_cd': 1,
+      '_source.organization_industries': 1
+    };
+  }
+
+  // 3-field: city+state+country
+  if (has(CI) && has(ST) && has(C)) {
+    return {
+      '_source.person_location_city': 1,
+      '_source.person_location_state': 1,
+      '_source.person_location_country': 1
+    };
+  }
+
+  // 2-field using prefix of 4-field compound:
+  // country+seniority — use the 4-field index as prefix
+  if (has(C) && has(S)) {
+    return {
+      '_source.person_location_country': 1,
+      '_source.person_seniority': 1,
+      '_source.person_email_status_cd': 1,
+      '_source.organization_industries': 1
+    };
+  }
+
+  // country+email_status — use 4-field index as prefix
+  if (has(C) && has(E)) {
+    return {
+      '_source.person_location_country': 1,
+      '_source.person_seniority': 1,
+      '_source.person_email_status_cd': 1,
+      '_source.organization_industries': 1
+    };
+  }
+
+  // city+state — use city+state+country as prefix
+  if (has(CI) && has(ST)) {
+    return {
+      '_source.person_location_city': 1,
+      '_source.person_location_state': 1,
+      '_source.person_location_country': 1
+    };
+  }
+
+  // ── Single-field safe indexes ───────────────────────────────────
+  // Only fields selective enough that hinting beats _id scan.
+  // High-density fields (country, state, seniority, email_status)
+  // excluded from single-field hints — too many matches per value.
+  const safeFields = [
+    '_source.organization_industries',
+    '_source.person_location_postal_code',
+    '_source.person_location_city',
+    '_source.organization_name',
+    '_source.person_email',
+    '_source.person_email_domain',
+    '_source.person_title',
+    '_source.organization_num_current_employees',
+    '_source.organization_current_technologies',
+    '_source.organization_keywords',
+    '_source.organization_founded_year',
+    '_source.organization_domain',
+    '_source.person_first_name_unanalyzed',
+    '_source.person_last_name_unanalyzed',
+    '_source.sanitized_organization_name_unanalyzed',
+  ];
+
+  for (const field of safeFields) {
+    if (has(field)) return { [field]: 1 };
+  }
+
+  return null;
+}
+
+// ── Company index hint helper ─────────────────────────────────────────────────
+// Mirrors getFilterIndex() but for companies_cache (bare field names, no _source.
+// prefix). Returns a MongoDB hint object for the best available index, or null.
+//
+// Single-field indexes are hinted when their corresponding filter is active.
+function getCompanyFilterIndex(mongoQuery) {
+  if (!mongoQuery || Object.keys(mongoQuery).length === 0)
+    return { _id: 1 };
+
+  const hasNonSelective = (() => {
+    const scan = (v) => {
+      if (!v || typeof v !== 'object') return false;
+      if (Array.isArray(v)) return v.some(scan);
+      for (const k of Object.keys(v)) {
+        if (k === '$exists' || k === '$ne' || k === '$not') return true;
+        if (scan(v[k])) return true;
+      }
+      return false;
+    };
+    return scan(mongoQuery);
+  })();
+  if (hasNonSelective) return null;
+
+  const fields = new Set();
+  const extract = (obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    if (Array.isArray(obj)) { obj.forEach(extract); return; }
+    for (const key of Object.keys(obj)) {
+      if (['$and','$or','$nor'].includes(key)) {
+        extract(obj[key]);
+      } else if (!key.startsWith('$')) {
+        fields.add(key);
+      }
+    }
+  };
+  extract(mongoQuery.$and || mongoQuery);
+  if (fields.size === 0) return null;
+
+  const has = (f) => fields.has(f);
+  const Q = 'quality_score';
+
+  // Compound: quality_score + filter field
+  if (has(Q) && has('organization_hq_location_country'))
+    return { quality_score: -1, organization_hq_location_country: 1 };
+  if (has(Q) && has('organization_industries'))
+    return { quality_score: -1, organization_industries: 1 };
+  if (has(Q) && has('organization_num_current_employees'))
+    return { quality_score: -1, organization_num_current_employees: 1 };
+  if (has(Q) && has('organization_hq_location_city'))
+    return { quality_score: -1, organization_hq_location_city: 1 };
+  if (has(Q) && has('organization_hq_location_state'))
+    return { quality_score: -1, organization_hq_location_state: 1 };
+  if (has(Q) && has('organization_hq_location_postal_code'))
+    return { quality_score: -1, organization_hq_location_postal_code: 1 };
+  if (has(Q) && has('organization_relevant_keywords'))
+    return { quality_score: -1, organization_relevant_keywords: 1 };
+
+  // quality_score alone → use existing compound with _contactCount
+  if (has(Q))
+    return { quality_score: -1, _contactCount: -1 };
+
+  // Selective single-field indexes that exist on companies_cache
+  const safeFields = [
+    'organization_hq_location_state',
+    'organization_hq_location_postal_code',
+    'organization_relevant_keywords',
+    'organization_hq_location_country',
+    'sanitized_organization_name_unanalyzed',
+    'normalized_name',
+    'organization_name',
+    'organization_domain',
+    'organization_industries',
+    'organization_num_current_employees',
+    'organization_hq_location_city',
+  ];
+
+  for (const field of safeFields) {
+    if (has(field)) return { [field]: 1 };
+  }
+
+  return null;
+}
+
+
+// --------------------------------------------------------------------------
+
+// ─── Timing Decorator ────────────────────────────────────────────────────────
+// Wraps an async fn and records wall-clock ms elapsed under a label.
+const timed = async (label, fn, timings) => {
+  const t0 = performance.now();
+  const result = await fn();
+  timings[label] = `${(performance.now() - t0).toFixed(2)}ms`;
+  return result;
+};
+
+// ── Company Data Enrichment (shared by batch and non-batch paths) ────────────
+// Looks up matching companies_cache docs and injects missing
+// organization_hq_location_postal_code / organization_num_current_employees
+// into each contact's _source.
+//
+// Match order:
+//   1. sanitized_organization_name_unanalyzed (exact match)
+//   2. organization_domain (lowercased, normalized)
+async function enrichContactsWithCompanyData(contacts) {
+  const mongoose = require("mongoose");
+  const cacheColl = mongoose.connection.db.collection("companies_cache");
+
+  // ── Phase 1: Promote admin-import fields to organization_* equivalents ──
+  for (const c of contacts) {
+    const src = c._source;
+    if (!src) continue;
+    if (src.organization_hq_location_postal_code == null && src.zipPostal) {
+      src.organization_hq_location_postal_code = src.zipPostal;
+    }
+    if (src.organization_num_current_employees == null && src.employees != null) {
+      src.organization_num_current_employees = src.employees;
+    }
+  }
+
+  // ── Collect actual field values from contacts ──
+  const nameValues = [];
+  const domainValues = [];
+  for (const c of contacts) {
+    const src = c._source;
+    if (!src) continue;
+    if (src.sanitized_organization_name_unanalyzed) {
+      nameValues.push(src.sanitized_organization_name_unanalyzed);
+    }
+    if (src.organization_domain) {
+      domainValues.push(
+        String(src.organization_domain).toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '')
+      );
+    }
+  }
+
+  if (nameValues.length === 0 && domainValues.length === 0) return true;
+
+  // ── Query companies_cache by actual fields ──
+  const orConditions = [];
+  if (nameValues.length > 0) {
+    orConditions.push({ sanitized_organization_name_unanalyzed: { $in: [...new Set(nameValues)] } });
+  }
+  if (domainValues.length > 0) {
+    orConditions.push({ organization_domain: { $in: [...new Set(domainValues)] } });
+  }
+
+  const companies = await cacheColl
+    .find({ $or: orConditions })
+    .project({
+      organization_hq_location_postal_code: 1,
+      organization_num_current_employees: 1,
+      sanitized_organization_name_unanalyzed: 1,
+      organization_domain: 1,
+    })
+    .toArray();
+
+  // ── Build lookup maps ──
+  const nameMap = new Map();
+  const domainMap = new Map();
+  for (const company of companies) {
+    if (company.sanitized_organization_name_unanalyzed) {
+      nameMap.set(company.sanitized_organization_name_unanalyzed, company);
+    }
+    if (company.organization_domain) {
+      domainMap.set(company.organization_domain.toLowerCase(), company);
+    }
+  }
+
+  // ── Phase 2: Fill missing fields from companies_cache ──
+  let matchedCount = 0;
+  let postalFilled = 0;
+  for (const c of contacts) {
+    const src = c._source;
+    if (!src) continue;
+    let company = null;
+    let matchBy = '';
+    if (src.sanitized_organization_name_unanalyzed) {
+      company = nameMap.get(src.sanitized_organization_name_unanalyzed);
+      if (company) matchBy = 'name';
+    }
+    if (!company && src.organization_domain) {
+      const domain = String(src.organization_domain).toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+      company = domainMap.get(domain);
+      if (company) matchBy = 'domain';
+    }
+    if (!company) {
+      if (matchedCount === 0) {
+        console.log('[EnrichDebug] No match for contact, has name:', !!src.sanitized_organization_name_unanalyzed, 'has domain:', !!src.organization_domain);
+      }
+      continue;
+    }
+    matchedCount++;
+    if (src.organization_num_current_employees == null && company.organization_num_current_employees != null) {
+      src.organization_num_current_employees = company.organization_num_current_employees;
+    }
+    if (src.organization_hq_location_postal_code == null && company.organization_hq_location_postal_code != null) {
+      src.organization_hq_location_postal_code = company.organization_hq_location_postal_code;
+      postalFilled++;
+    }
+  }
+  console.log('[EnrichDebug] matched:', matchedCount, 'contacts, postal filled:', postalFilled, 'out of', contacts.length, 'contacts');
+  if (matchedCount === 0) {
+    console.log('[EnrichDebug] nameMap size:', nameMap.size, 'domainMap size:', domainMap.size);
+    console.log('[EnrichDebug] sample name keys:', [...nameMap.keys()].slice(0, 3));
+    console.log('[EnrichDebug] sample domain keys:', [...domainMap.keys()].slice(0, 3));
+    if (nameValues.length > 0) console.log('[EnrichDebug] sample contact name values:', nameValues.slice(0, 3));
+    if (domainValues.length > 0) console.log('[EnrichDebug] sample contact domain values:', domainValues.slice(0, 3));
+  }
+  return true;
+}
+
+const executeSearch = async ({ userId, filters = {}, excludedFilters = {}, debugMode = false, forceRefresh = false }) => {
+  // ── Batch mode (cursor-based, no cache, no hydrate) ─────────────────────────
+  if (filters.batchMode === true) {
+    const mongoQuery = buildMongoQuery(filters, "total", [], [], excludedFilters);
+    if (filters.cursor) {
+      mongoQuery._id = { $gt: filters.cursor };
+    }
+    const mongoHits = await contacts_v5.find(mongoQuery, { _id: 1, _source: 1 })
+      .sort({ _id: 1 })
+      .allowDiskUse()
+      .limit(25)
+      .batchSize(25)
+      .lean();
+    const contacts = mongoHits.map(doc => ({
+      _id: String(doc._id),
+      _source: doc._source || {},
+    }));
+    await enrichContactsWithCompanyData(contacts);
+    return {
+      results: contacts,
+      counts: { onPage: contacts.length },
+      page: 1,
+      hasMore: contacts.length === 25,
+      nextCursor: String(contacts[contacts.length - 1]?._id),
+    };
+  }
+
+  const t_total = performance.now();
+  const timings = {};
+
+  const limit = Math.min(filters.limit || 25, 1000);
+  const page = parseInt(filters.currentPage) || parseInt(filters.page) || 1;
+  const viewType = (filters.viewType || "total").toLowerCase();
+
+  // ── Phase 0: Cache Check ──────────────────────────────────────────────────
+  const cacheKey = generateCacheKey(userId, filters, excludedFilters);
+  if (!debugMode && !forceRefresh) {
+    const cached = await timed("cache_check", () =>
+      redisClient.get(cacheKey).catch(() => null),
+    timings);
+    if (cached) {
+      timings.cache_hit = true;
+      timings.total = `${(performance.now() - t_total).toFixed(2)}ms`;
+      logger.info("[Search] Cache HIT", { timings, page });
+      return JSON.parse(cached);
+    }
+  }
+  timings.cache_hit = false;
+
+  // ── Phase 1.5: List ID Resolution ─────────────────────────────────────────
+  let listContactIds = [];
+  if (filters.list && Array.isArray(filters.list) && filters.list.length > 0) {
+    const List = require("../models/List");
+    const SavedContacts = require("../models/SavedContacts");
+    
+    await timed("list_id_resolution", async () => {
+      const lists = await List.find({ 
+        userId, 
+        name: { $in: filters.list } 
+      }).select("_id").lean();
+      
+      const listIds = lists.map(l => l._id);
+      
+      if (listIds.length > 0) {
+        const savedContacts = await SavedContacts.find({
+          userId,
+          listIds: { $in: listIds }
+        }).select("contactId").lean();
+        
+        listContactIds = savedContacts.map(sc => sc.contactId);
+      }
+    }, timings);
+  }
+
+  // ── Phase 2: Saved IDs Hydration (Mongo Metadata) ────────────────────────
+  let savedContactIds;
+  const savedIdsCacheKey = `savedIds:${userId}`;
+  const cachedSavedIds = await redisClient.get(savedIdsCacheKey).catch(() => null);
+  if (cachedSavedIds) {
+    savedContactIds = JSON.parse(cachedSavedIds);
+  } else {
+    await timed("saved_meta_hydration", async () => {
+      const [savedItemDocs, savedContactsDocs] = await Promise.all([
+        SavedItem.find({ userId }).select("contactId").lean(),
+        SavedContacts.find({ userId }).select("contactId").lean(),
+      ]);
+      savedContactIds = Array.from(
+        new Set([
+          ...savedItemDocs.map((item) => String(item.contactId)),
+          ...savedContactsDocs.map((item) => String(item.contactId)),
+        ]),
+      );
+    }, timings);
+    redisClient.set(savedIdsCacheKey, JSON.stringify(savedContactIds), { EX: 300 }).catch(() => {});
+  }
+
+  const savedContactIdSet = new Set(savedContactIds);
+
+  // ── Strip non-filter keys and build MongoDB query ──────────────────────
+  const searchFilterKeys = Object.keys(fieldConfig);
+  const cleanFilters = {};
+  Object.entries(filters).forEach(([key, value]) => {
+    if (searchFilterKeys.includes(key)) cleanFilters[key] = value;
+  });
+  const mongoQuery = buildMongoQuery(cleanFilters, viewType, savedContactIds, listContactIds, excludedFilters);
+
+  console.log("[SEARCH] Received filters:", JSON.stringify(cleanFilters));
+  console.log("[SEARCH] Received excludedFilters:", JSON.stringify(excludedFilters));
+  console.log("[SEARCH] Built mongoQuery:", JSON.stringify(mongoQuery));
+  console.log("[SEARCH] mongoQuery empty?:", Object.keys(mongoQuery).length === 0);
+  console.log("[SEARCH] page:", page, "limit:", limit);
+
+  let mongoHits;
+  await timed("mongo_search", async () => {
+    const hint = getFilterIndex(mongoQuery);
+
+    // ── Stage 1: Fetch only _id for matching, sorted documents ─────────────
+    // Fetches just the _id field (lightweight) for all matching docs, then
+    // applies sort/skip/limit. This keeps data transfer minimal compared to
+    // pulling _source for every matched document that gets skipped.
+    const execStage1 = (q, hintVal) => {
+      let qb = contacts_v5
+        .find(q, { _id: 1 })
+        .sort({ _id: 1 })
+        .batchSize(limit)
+        .allowDiskUse()
+        .maxTimeMS(30000);
+      if (filters.cursor) {
+        qb = qb.find({ ...q, _id: { $gt: filters.cursor } });
+      } else {
+        qb = qb.skip((page - 1) * limit);
+        if (!hintVal) hintVal = { _id: 1 };
+      }
+      qb = qb.limit(limit);
+      if (hintVal) qb = qb.hint(hintVal);
+      return qb.lean();
+    };
+
+    let idDocs;
+    try {
+      idDocs = await execStage1(mongoQuery, hint);
+    } catch (err) {
+      console.log("[SEARCH] Stage 1 failed, retrying without hint:", err.message);
+      idDocs = await execStage1(mongoQuery, null);
+    }
+
+    if (idDocs.length === 0) {
+      mongoHits = [];
+    } else {
+      // ── Stage 2: Fetch full _source for only the page's _id values ──────
+      const pageIds = idDocs.map(d => d._id);
+      const fullDocs = await contacts_v5
+        .find({ _id: { $in: pageIds } }, { _id: 1, _source: 1 })
+        .lean();
+
+      // Reconstruct in the correct order (preserve Stage 1 sort order)
+      const docMap = new Map(fullDocs.map(d => [String(d._id), d]));
+      mongoHits = pageIds.map(id => docMap.get(String(id))).filter(Boolean);
+    }
+  }, timings);
+
+  console.log("[SEARCH] mongoHits count:", mongoHits?.length);
+
+  // ── In-memory is_saved tagging ─────────────────────────────────────────────
+  const contacts = mongoHits.map((doc) => ({
+    _id: String(doc._id),
+    _source: doc._source || {},
+    is_saved: savedContactIdSet.has(String(doc._id)),
+  }));
+
+  // ── Enrich contacts with company-level data for missing fields ────────────
+  await timed("company_enrich", async () => {
+    const hadKeys = await enrichContactsWithCompanyData(contacts);
+    if (!hadKeys) {
+      for (let i = 0; i < Math.min(3, contacts.length); i++) {
+        const s = contacts[i]._source || {};
+        console.log("[Enrich] Contact", i, "has org_id:", !!s.organization_id, "org_domain:", !!s.organization_domain);
+        console.log("[Enrich] Contact", i, "_source keys sample:", Object.keys(s).slice(0, 10));
+        console.log("[Enrich] Contact", i, "postal:", s.organization_hq_location_postal_code);
+        console.log("[Enrich] Contact", i, "employees:", s.organization_num_current_employees);
+      }
+    }
+  }, timings);
+
+  timings.total = `${(performance.now() - t_total).toFixed(2)}ms`;
+  logger.info("[Search] Execution complete", { timings, page, onPage: contacts.length });
+
+  const nextCursor = mongoHits.length === limit
+    ? String(mongoHits[mongoHits.length - 1]._id)
+    : null;
+
+  const finalResponse = {
+    results: contacts,
+    counts: { onPage: contacts.length },
+    page,
+    nextCursor,
+    hasMore: mongoHits.length === limit,
+  };
+
+  if (debugMode) {
+    finalResponse.debug = {
+      timings,
+      mongoQuery,
+      mongoIds: mongoHits.slice(0, 10).map(d => String(d._id)),
+    };
+  }
+
+  return finalResponse;
+};
+
+
+// ── Search Count (separate endpoint, cached) ────────────────────────────────
+
+const executeSearchCount = async ({ userId, filters = {}, excludedFilters = {} }) => {
+  const countCacheKey = 'count:' + generateCacheKey(userId, filters, excludedFilters);
+  const cached = await redisClient.get(countCacheKey).catch(() => null);
+  if (cached) {
+    try {
+      const parsed = JSON.parse(cached);
+      return { total: parsed.total, saved: parsed.saved, new: parsed.new, fromCache: true };
+    } catch {
+      return { total: parseInt(cached), saved: 0, new: 0, fromCache: true };
+    }
+  }
+
+  const searchFilterKeys = Object.keys(fieldConfig);
+  const cleanFilters = {};
+  Object.entries(filters).forEach(([key, value]) => {
+    if (searchFilterKeys.includes(key)) cleanFilters[key] = value;
+  });
+
+  const hasActiveFilters = Object.values(cleanFilters).some(v =>
+    Array.isArray(v) ? v.length > 0 : v != null && v !== ''
+  ) || Object.values(excludedFilters).some(v =>
+    Array.isArray(v) ? v.length > 0 : v != null && v !== ''
+  );
+
+  // ── Resolve list contact IDs (use original filters.key, not cleanFilters) ─
+  let listContactIds = [];
+  if (filters.list && Array.isArray(filters.list) && filters.list.length > 0) {
+    const List = require("../models/List");
+    const SavedContactsModel = require("../models/SavedContacts");
+    const lists = await List.find({ userId, name: { $in: filters.list } }).select("_id").lean();
+    const listIds = lists.map(l => l._id);
+    if (listIds.length > 0) {
+      const savedContacts = await SavedContactsModel.find({ userId, listIds: { $in: listIds } }).select("contactId").lean();
+      listContactIds = savedContacts.map(sc => sc.contactId);
+    }
+  }
+
+  // ── Resolve saved contact IDs (needed for all three counts) ────────────
+  let savedContactIds;
+  const savedIdsCacheKey = `savedIds:${userId}`;
+  const cachedSavedIds = await redisClient.get(savedIdsCacheKey).catch(() => null);
+  if (cachedSavedIds) {
+    savedContactIds = JSON.parse(cachedSavedIds);
+  } else {
+    const [savedItemDocs, savedContactsDocs] = await Promise.all([
+      SavedItem.find({ userId }).select("contactId").lean(),
+      SavedContacts.find({ userId }).select("contactId").lean(),
+    ]);
+    savedContactIds = Array.from(new Set([
+      ...savedItemDocs.map(item => String(item.contactId)),
+      ...savedContactsDocs.map(item => String(item.contactId)),
+    ]));
+    redisClient.set(savedIdsCacheKey, JSON.stringify(savedContactIds), { EX: 300 }).catch(() => {});
+  }
+
+  console.log("[SEARCH] COUNT hasActiveFilters:", hasActiveFilters, "savedContactIds count:", savedContactIds.length);
+  console.log("[SEARCH] COUNT cleanFilters:", JSON.stringify(cleanFilters));
+  console.log("[SEARCH] COUNT excludedFilters:", JSON.stringify(excludedFilters));
+
+  // ── No-filter case: estimatedDocumentCount (instant) ────────────────────
+  if (!hasActiveFilters) {
+    const total = await getTotalCount();
+    const savedCount = await contacts_v5.countDocuments({ _id: { $in: savedContactIds } });
+    console.log("[SEARCH] COUNT no-filter: total:", total, "saved:", savedCount);
+    return { total, saved: savedCount, new: total - savedCount, fromCache: true };
+  }
+
+  // ── Build queries for total and saved counts ──────────────────────────
+  // newCount is derived as total - saved (avoids expensive $nin query)
+  const totalQuery = buildMongoQuery(cleanFilters, "total", savedContactIds, listContactIds, excludedFilters);
+  const savedQuery = buildMongoQuery(cleanFilters, "saved", savedContactIds, listContactIds, excludedFilters);
+
+  // Count with hint and shorter timeout (10s) — if it times out, return null
+  const COUNT_TIMEOUT_MS = 10000;
+  const mkCountOpts = (q) => {
+    const opts = { maxTimeMS: COUNT_TIMEOUT_MS };
+    const hint = getFilterIndex(q);
+    if (hint) opts.hint = hint;
+    return opts;
+  };
+  const countTotal = contacts_v5.countDocuments(totalQuery, mkCountOpts(totalQuery)).catch(err => {
+    console.error("[SEARCH] COUNT total query failed:", err.message);
+    return null;
+  });
+  const countSaved = contacts_v5.countDocuments(savedQuery, mkCountOpts(savedQuery)).catch(err => {
+    console.error("[SEARCH] COUNT saved query failed:", err.message);
+    return null;
+  });
+
+  const [total, saved] = await Promise.all([countTotal, countSaved]);
+
+  // Derive new count from total - saved
+  let newCount = null;
+  if (total !== null && saved !== null) {
+    newCount = Math.max(0, total - saved);
+  }
+
+  const result = { total, saved, new: newCount, fromCache: false };
+  await redisClient.set(countCacheKey, JSON.stringify({ total, saved, new: newCount }), { EX: 600 }).catch(() => {});
+
+  return result;
+};
+
+
+// ── Company Search (unique companies via ES composite aggregation) ─────────
+//
+// NOTE: Ideal dedup fields (when companies index is available):
+//   1. organization_id          ← most reliable, use first
+//   2. organization_domain      ← second priority
+//   3. sanitized_organization_name_unanalyzed  ← last resort
+// These fields are NOT yet in contacts_search. Using organization_name.keyword
+// + company_name.keyword as fallbacks until the companies index is created.
+//
+// ╔════════════════════════════════════════════════════════════════════════╗
+// ║  OLD APPROACH (companies index) — kept for reference:                 ║
+// ║                                                                       ║
+// ║  const result = await esClient.search({                               ║
+// ║    index: "companies",                                                ║
+// ║    body: { ... }                                                      ║
+// ║  });                                                                  ║
+// ║                                                                       ║
+// ╚════════════════════════════════════════════════════════════════════════╝
+//
+const executeCompanySearch = async ({ userId, filters = {}, excludedFilters = {}, debugMode = false, forceRefresh = false }) => {
+  const t_total = performance.now();
+  const timings = {};
+
+  const limit = Math.min(filters.limit || 25, 10000);
+  const page = parseInt(filters.currentPage) || parseInt(filters.page) || 1;
+  const skip = (page - 1) * limit;
+
+  // ── Phase 0: Cache Check ──────────────────────────────────────────────
+  const cacheKey = "company:" + generateCacheKey(userId, filters, excludedFilters);
+  if (!debugMode && !forceRefresh) {
+    const cached = await redisClient.get(cacheKey).catch(() => null);
+    if (cached) {
+      timings.cache_hit = true;
+      timings.total = `${(performance.now() - t_total).toFixed(2)}ms`;
+      return JSON.parse(cached);
+    }
+  }
+  timings.cache_hit = false;
+
+  // ── Saved IDs Hydration ──────────────────────────────────────────────
+  let savedContactIds = [];
+  const savedIdsCacheKey = `savedIds:${userId}`;
+  const cachedSavedIds = await redisClient.get(savedIdsCacheKey).catch(() => null);
+  if (cachedSavedIds) {
+    savedContactIds = JSON.parse(cachedSavedIds);
+  } else {
+    const [savedItemDocs, savedContactsDocs] = await Promise.all([
+      SavedItem.find({ userId }).select("contactId").lean(),
+      SavedContacts.find({ userId }).select("contactId").lean(),
+    ]);
+    savedContactIds = Array.from(
+      new Set([
+        ...savedItemDocs.map((item) => String(item.contactId)),
+        ...savedContactsDocs.map((item) => String(item.contactId)),
+      ]),
+    );
+    redisClient.set(savedIdsCacheKey, JSON.stringify(savedContactIds), { EX: 300 }).catch(() => {});
+  }
+  const savedContactIdSet = new Set(savedContactIds);
+
+  // ── Build MongoDB query from filters ──────────────────────────────────
+  const conditions = [];
+
+  // Default quality filter: Good+ (score >= 60)
+  const qualityThreshold = parseInt(filters.quality, 10);
+  if (!isNaN(qualityThreshold)) {
+    conditions.push({ quality_score: { $gte: qualityThreshold } });
+  } else if (filters.quality !== 'all') {
+    conditions.push({ quality_score: { $gte: 60 } });
+  }
+
+  // organizationName / company → normalized_name + sanitized_organization_name_unanalyzed (prefix range)
+  const orgNameValues = filters.organizationName || filters.company || [];
+  const orgNameArr = Array.isArray(orgNameValues) ? orgNameValues : [orgNameValues];
+  const validOrgNames = orgNameArr.filter(v => v !== undefined && v !== null && String(v).trim() !== "");
+  if (validOrgNames.length > 0) {
+    conditions.push({
+      $or: validOrgNames.map(v => {
+        const prefix = v.toLowerCase();
+        return {
+          $or: [
+            { normalized_name: { $gte: prefix, $lt: prefix + '\uffff' } },
+            { sanitized_organization_name_unanalyzed: { $gte: prefix, $lt: prefix + '\uffff' } },
+          ]
+        };
+      })
+    });
+  }
+
+  // organizationDomain → organization_domain (prefix range)
+  const domainValues = filters.organizationDomain || [];
+  const domainArr = Array.isArray(domainValues) ? domainValues : [domainValues];
+  const validDomains = domainArr.filter(v => v !== undefined && v !== null && String(v).trim() !== "");
+  if (validDomains.length > 0) {
+    conditions.push({
+      $or: validDomains.map(v => ({
+        organization_domain: { $gte: v, $lt: v + '\uffff' }
+      }))
+    });
+  }
+
+  // country → $in on organization_hq_location_country
+  const countryValues = filters.country || [];
+  const countryArr = Array.isArray(countryValues) ? countryValues : [countryValues];
+  const validCountries = countryArr.filter(v => v !== undefined && v !== null && String(v).trim() !== "");
+  if (validCountries.length > 0) {
+    conditions.push({ organization_hq_location_country: { $in: validCountries } });
+  }
+
+  // cityState / location → prefix range OR on city and state
+  const locationValues = filters.cityState || filters.location || [];
+  const locationArr = Array.isArray(locationValues) ? locationValues : [locationValues];
+  const validLocations = locationArr.filter(v => v !== undefined && v !== null && String(v).trim() !== "");
+  if (validLocations.length > 0) {
+    const should = [];
+    for (const val of validLocations) {
+      should.push(
+        { organization_hq_location_city: { $gte: val, $lt: val + '\uffff' } },
+        { organization_hq_location_state: { $gte: val, $lt: val + '\uffff' } },
+      );
+    }
+    conditions.push({ $or: should });
+  }
+
+  // zip → prefix range on organization_hq_location_postal_code
+  const zipValues = filters.zip || [];
+  const zipArr = Array.isArray(zipValues) ? zipValues : [zipValues];
+  const validZips = zipArr.filter(v => v !== undefined && v !== null && String(v).trim() !== "");
+  if (validZips.length > 0) {
+    conditions.push({
+      $or: validZips.map(v => ({
+        organization_hq_location_postal_code: { $gte: v, $lt: v + '\uffff' }
+      }))
+    });
+  }
+
+  // industry → $in on organization_industries (lowercase)
+  const industryValues = filters.industry || [];
+  const industryArr = Array.isArray(industryValues) ? industryValues : [industryValues];
+  const validIndustries = industryArr.filter(v => v !== undefined && v !== null && String(v).trim() !== "");
+  if (validIndustries.length > 0) {
+    conditions.push({
+      organization_industries: { $in: validIndustries.map(v => v.toLowerCase()) }
+    });
+  }
+
+  // employeeRange → parse range strings ("1-10", "1000+") into $gte/$lte
+  const empValues = filters.employeeRange || [];
+  const empArr = Array.isArray(empValues) ? empValues : [empValues];
+  const validEmp = empArr.filter(v => v !== undefined && v !== null && String(v).trim() !== "");
+  if (validEmp.length > 0) {
+    const rangeConditions = validEmp.map(range => {
+      const cleanStr = String(range).replace(/\s/g, "");
+      const cond = {};
+      if (/andmore/i.test(cleanStr) || cleanStr.endsWith("+")) {
+        const numStr = cleanStr.replace(/andmore/i, "").replace(/\+$/, "");
+        const num = parseInt(numStr, 10);
+        if (!Number.isNaN(num)) cond.$gte = num;
+      } else if (cleanStr.includes("-")) {
+        const parts = cleanStr.split("-").filter(p => p.trim());
+        if (parts.length === 2) {
+          const minVal = parseInt(parts[0], 10);
+          const maxVal = parseInt(parts[1], 10);
+          if (!Number.isNaN(minVal)) cond.$gte = minVal;
+          if (!Number.isNaN(maxVal)) cond.$lte = maxVal;
+        }
+      }
+      return Object.keys(cond).length ? { organization_num_current_employees: cond } : null;
+    }).filter(Boolean);
+    if (rangeConditions.length) conditions.push({ $or: rangeConditions });
+  }
+
+  // keywords → prefix range on organization_relevant_keywords
+  const kwValues = filters.keywords || [];
+  const kwArr = Array.isArray(kwValues) ? kwValues : [kwValues];
+  const validKws = kwArr.filter(v => v !== undefined && v !== null && String(v).trim() !== "");
+  if (validKws.length > 0) {
+    conditions.push({
+      $or: validKws.map(v => ({
+        organization_relevant_keywords: { $gte: v, $lt: v + '\uffff' }
+      }))
+    });
+  }
+
+  const query = conditions.length > 0 ? { $and: conditions } : {};
+
+  // ── Execute MongoDB query (two-stage pagination + smart hint) ──────
+  let totalHits = null;
+  let companies = [];
+  await timed("mongo_company_search", async () => {
+    const hint = getCompanyFilterIndex(query);
+
+    // Count — 10s timeout, null on failure
+    try {
+      const countOpts = { maxTimeMS: 10000 };
+      if (hint) countOpts.hint = hint;
+      totalHits = await CompaniesCache.countDocuments(query, countOpts);
+    } catch (err) {
+      console.log("[CompanySearch] Count timeout:", err.message);
+    }
+
+    try {
+      const execCompanyStage1 = async (q, hintVal, useSkip) => {
+        let qb = CompaniesCache
+          .find(q)
+          .limit(limit)
+          .batchSize(limit)
+          .allowDiskUse()
+          .maxTimeMS(30000);
+        if (useSkip) {
+          qb = qb.skip(skip);
+        }
+        if (hintVal) qb = qb.hint(hintVal);
+        return qb.lean();
+      };
+
+      const companyHint = hint;
+      companies = await execCompanyStage1(query, companyHint, true);
+    } catch (err) {
+      console.log("[CompanySearch] Hint query failed, falling back:", err.message);
+      companies = await CompaniesCache.find(query)
+        .skip(skip).limit(limit).allowDiskUse().maxTimeMS(120000).lean();
+    }
+  }, timings);
+
+  // ── Format results ───────────────────────────────────────────────────
+  const results = companies.map((doc) => ({
+    _id: String(doc._id),
+    _source: doc,
+    is_saved: savedContactIdSet.has(String(doc._id)),
+    _contactCount: doc._contactCount || 0,
+  }));
+
+  timings.total = `${(performance.now() - t_total).toFixed(2)}ms`;
+
+  const nextCursor = results.length === limit
+    ? String(companies[companies.length - 1]._id)
+    : null;
+
+  const finalResponse = {
+    results,
+    counts: {
+      total: totalHits,
+      onPage: results.length,
+    },
+    page,
+    nextCursor,
+  };
+
+  await redisClient.set(cacheKey, JSON.stringify(finalResponse), { EX: 300 }).catch(() => {});
+
+  return finalResponse;
+};
+
+module.exports = { executeSearch, executeSearchCount, executeCompanySearch, getCompanyFilterIndex };

@@ -1,0 +1,12 @@
+{
+  "name": "aegiscore-cli",
+  "version": "1.0.0",
+  "description": "AegisCore Security CLI — Cybersecurity defense toolkit for developers",
+  "bin": {
+    "aegis": "./index.js"
+  },
+  "scripts": {
+    "aegis": "node index.js"
+  },
+  "license": "MIT"
+}

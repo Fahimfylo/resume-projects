@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 230 40% 6%;
+    --foreground: 210 40% 98%;
+    --card: 230 40% 8%;
+    --card-foreground: 210 40% 98%;
+    --popover: 230 40% 6%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 230 20% 15%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 230 20% 15%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 262 83% 66%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 230 20% 15%;
+    --input: 230 20% 15%;
+    --ring: 217 91% 60%;
+    --radius: 0.75rem;
+    --chart-1: 217 91% 60%;
+    --chart-2: 262 83% 66%;
+    --chart-3: 199 89% 48%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground selection:bg-primary/30 selection:text-primary;
+  }
+}
+
+.glass {
+  @apply bg-white/5 backdrop-blur-lg border border-white/10 shadow-xl;
+}
+
+.glass-dark {
+  @apply bg-black/40 backdrop-blur-xl border border-white/5 shadow-2xl;
+}
+
+.cyber-gradient {
+  background: linear-gradient(135deg, #0A0C16 0%, #1e293b 100%);
+}
+
+.text-glow {
+  text-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+}
+
+.border-glow {
+  box-shadow: 0 0 15px rgba(139, 92, 246, 0.2);
+}
+
+@keyframes scan {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+.scanning-line {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #3B82F6, transparent);
+  animation: scan 2s linear infinite;
+}

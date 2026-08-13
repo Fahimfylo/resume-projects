@@ -1,0 +1,6 @@
+{
+  "watch": ["src"],
+  "ext": "ts,tsx,js,jsx,json",
+  "exec": "npx next dev -p 9002",
+  "delay": 1000
+}

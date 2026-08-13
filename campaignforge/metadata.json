@@ -1,0 +1,6 @@
+{
+  "name": "Momentum",
+  "description": "An AI-powered campaign and execution workspace generator built with Zuned Aalim portfolio aesthetics and Apple Liquid Glass design elements.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

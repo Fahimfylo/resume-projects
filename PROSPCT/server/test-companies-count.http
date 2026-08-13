@@ -1,0 +1,8 @@
+POST http://localhost:3001/api/search/companies-count
+Content-Type: application/json
+Authorization: Bearer test-token
+
+{
+  "filters": {}
+}
+cd serve

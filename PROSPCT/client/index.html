@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/logo/Favicon.png" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prospct</title>
+
+  <!-- FastSpring SBL (Storefront Builder Library) -->
+  <script id="fsc-api" src="https://sbl.onfastspring.com/sbl/1.0.6/fastspring-builder.min.js" type="text/javascript"
+    data-storefront="prospct.onfastspring.com" data-access-key="U46CRMFZROOYBDPE-XUBUW"
+    data-data-callback="dataCallback" data-error-callback="fsErrorCallback" data-popup-closed="onFSPopupClosed"
+    data-continuous="true">
+    </script>
+
+  <!-- FastSpring Global Callbacks (must be defined before React mounts) -->
+  <script>
+    window.dataCallback = function (data) {
+      if (data.totalValue > 0) {
+      } else {
+        console.warn("[FastSpring] ✗ Session empty - check product paths");
+      }
+    };
+    window.fsErrorCallback = function (code, url) {
+      console.error("[FastSpring] SBL error:", code, url);
+    };
+    window.onFSPopupClosed = function (orderRef) {
+      if (orderRef?.id) window.location.replace("/dashboard");
+    };
+  </script>
+
+  <!-- Theme initialization (must run before React to prevent flash) -->
+  <script>
+    (function() {
+      var savedTheme = localStorage.getItem('theme');
+      var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var isDark = savedTheme === 'dark' || (!savedTheme && prefersDark);
+      
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+      }
+    })();
+  </script>
+</head>
+
+<body class="transition-colors duration-0">
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+
+</html>

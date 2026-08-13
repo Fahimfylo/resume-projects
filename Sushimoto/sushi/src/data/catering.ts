@@ -1,0 +1,55 @@
+import type { CateringPackage } from "@/types";
+
+export const cateringPackages: CateringPackage[] = [
+  {
+    id: "package-basic",
+    name: "Sakura Basic",
+    description: "Perfect for small gatherings and office lunches.",
+    price: 299,
+    serving: "10-15 guests",
+    features: [
+      "3 sushi rolls (choose from menu)",
+      "Miso soup",
+      "Edamame",
+      "Steamed rice",
+      "Soy sauce & wasabi",
+      "Disposable serving ware",
+    ],
+  },
+  {
+    id: "package-premium",
+    name: "Premium Zen",
+    description: "Ideal for celebrations and family events.",
+    price: 599,
+    serving: "15-25 guests",
+    popular: true,
+    features: [
+      "5 sushi rolls (premium selection)",
+      "Ramen bar station",
+      "Gyoza & tempura platter",
+      "Mixed green salad with ginger dressing",
+      "Mochi ice cream dessert",
+      "Chopsticks & reusable serving ware",
+      "Setup & cleanup included",
+    ],
+  },
+  {
+    id: "package-luxury",
+    name: "Imperial Feast",
+    description: "The ultimate catering experience for grand occasions.",
+    price: 1299,
+    serving: "25-40 guests",
+    features: [
+      "Omakase-style 7-course menu",
+      "Live sushi chef station",
+      "Premium sashimi platter",
+      "Full ramen bar with all toppings",
+      "Tempura & robata grill selections",
+      "Assorted premium drinks",
+      "Dessert platter with matcha treats",
+      "Full-service staff",
+      "Custom menu consultation",
+      "Setup, service & full cleanup",
+    ],
+  },
+];
